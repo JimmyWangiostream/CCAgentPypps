@@ -41,6 +41,9 @@ class SigSpec:
     has_kwargs: bool = False        # **kwargs present -> any kwarg accepted
     has_varargs: bool = False       # *args present  -> any positional count accepted
     max_positional: int = 0         # positional-or-keyword + positional-only count
+    pos_params: list = field(default_factory=list)   # ordered positional param names
+    num_pos_required: int = 0       # leading positional params WITHOUT a default
+    required_kwonly: set = field(default_factory=set)  # kw-only params without a default
 
 
 @dataclass
@@ -85,12 +88,21 @@ def _sig_from_args(args: ast.arguments, skip_self: bool) -> SigSpec:
         names = names[1:]
     kwonly = [a.arg for a in args.kwonlyargs]
     params = set(names) | set(kwonly)
+    # Defaults bind to the TAIL of the positional list, so the leading
+    # (len(names) - num_defaults) positional params are required.
+    num_pos_required = max(0, len(names) - len(args.defaults))
+    required_kwonly = {
+        a.arg for a, d in zip(args.kwonlyargs, args.kw_defaults) if d is None
+    }
     return SigSpec(
         kind="func",
         params=params,
         has_kwargs=args.kwarg is not None,
         has_varargs=args.vararg is not None,
         max_positional=len(names),
+        pos_params=names,
+        num_pos_required=num_pos_required,
+        required_kwonly=required_kwonly,
     )
 
 
@@ -279,14 +291,32 @@ def check_api_calls(py_source: str, index: dict) -> list:
                     })
 
         # positional argument count must fit (unless *args)
+        has_star = any(isinstance(a, ast.Starred) for a in node.args)
+        n_pos = len(node.args)
         if not spec.has_varargs:
-            has_star = any(isinstance(a, ast.Starred) for a in node.args)
-            n_pos = len(node.args)
             if not has_star and n_pos > spec.max_positional:
                 issues.append({
                     "alias": alias, "symbol": name, "kind": "too_many_positional",
                     "detail": (f"{alias}.{name}() takes at most {spec.max_positional} "
                                f"positional args, got {n_pos}"),
+                    "line": node.lineno,
+                })
+
+        # required arguments must all be supplied. Only checked when the call
+        # site is unambiguous (no *args / **kwargs splat) — we prefer false
+        # negatives over crying wolf.
+        has_dsplat = any(kw.arg is None for kw in node.keywords)
+        if not has_star and not has_dsplat:
+            provided_kw = {kw.arg for kw in node.keywords if kw.arg}
+            # positional args fill the first n_pos positional params
+            missing = [p for p in spec.pos_params[n_pos:spec.num_pos_required]
+                       if p not in provided_kw]
+            missing += [k for k in spec.required_kwonly if k not in provided_kw]
+            if missing:
+                issues.append({
+                    "alias": alias, "symbol": name, "kind": "missing_required_arg",
+                    "detail": (f"{alias}.{name}() missing required argument(s): "
+                               f"{', '.join(missing)}"),
                     "line": node.lineno,
                 })
     return issues

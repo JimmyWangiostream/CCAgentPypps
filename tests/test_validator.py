@@ -3,25 +3,130 @@ from pathlib import Path
 from pattern_generator.validator import validate
 
 
-IR = {"phases": [{"phase_id": "loop_1", "type": "loop", "loop_type": "count",
-                  "loop_count": 100, "steps": []}]}
+# Two sequential steps: step1 produces max_lba, step2 consumes it.
+SEQ_IR = {
+    "pattern_id": "PFX", "title": "t",
+    "phases": [{"phase_id": "phase_0", "name": "P", "type": "sequential",
+                "loop_type": None, "loop_count": None, "steps": [
+        {"step_id": "s1", "scsi_cmd": "TUR", "ufs_query": None, "opcode": "0x00",
+         "query_opcode": None, "idn": None, "expected": "GOOD",
+         "produces": ["max_lba"], "consumes": []},
+        {"step_id": "s2", "scsi_cmd": "READ", "ufs_query": None, "opcode": "0x28",
+         "query_opcode": None, "idn": None, "expected": "GOOD",
+         "produces": [], "consumes": ["max_lba"]}],
+        "inputs": [], "outputs": ["max_lba"]}],
+    "dependency_graph": {"nodes": ["phase_0"], "edges": []},
+}
+
+# Count loop (50) with one sub-step -> methods: _loop1_step_1_1 + wrapper step1.
+LOOP_IR = {
+    "pattern_id": "PFY", "title": "t",
+    "phases": [{"phase_id": "loop_1", "name": "L", "type": "loop",
+                "loop_type": "count", "loop_count": 50, "steps": [
+        {"step_id": "step_1_1", "scsi_cmd": "X", "ufs_query": None, "opcode": None,
+         "query_opcode": None, "idn": None, "expected": "", "produces": [],
+         "consumes": []}], "inputs": [], "outputs": []}],
+    "dependency_graph": {"nodes": ["loop_1"], "edges": []},
+}
+
+GOOD = (
+    "class P(UFSTC):\n"
+    "    def step1(self) -> None:\n"
+    "        self.max_lba = 100\n"
+    "    def step2(self) -> None:\n"
+    "        x = self.max_lba\n"
+    "\n"
+    "if __name__ == '__main__':\n"
+    "    P().run()\n"
+)
 
 
 def test_syntax_failure_is_reported():
-    out = validate("def f(:\n  pass", IR)
+    out = validate("def f(:\n  pass", SEQ_IR)
     assert out["syntax"] != "pass"
 
 
-def test_structure_checks_loop_count_present():
-    good = "for i in range(100):\n    pass\n"
-    out = validate(good, IR)
+def test_structure_passes_well_formed():
+    out = validate(GOOD, SEQ_IR)
     assert out["syntax"] == "pass"
+    assert out["structure"] == "pass"
+    assert out["dataflow"] == "pass"
+
+
+def test_structure_catches_methods_outside_class():
+    """The #1 catastrophic bug: stepN methods land outside the class / after the
+    __main__ guard. Parses fine, but process() runs nothing."""
+    bad = (
+        "class P(UFSTC):\n"
+        "    def pre_process(self) -> None:\n"
+        "        pass\n"
+        "\n"
+        "if __name__ == '__main__':\n"
+        "    P().run()\n"
+        "\n"
+        "    def step1(self) -> None:\n"
+        "        self.max_lba = 100\n"
+        "    def step2(self) -> None:\n"
+        "        x = self.max_lba\n"
+    )
+    out = validate(bad, SEQ_IR)
+    assert out["structure"] != "pass"
+    blob = " ".join(out["structure"])
+    assert "OUTSIDE the pattern class" in blob
+    assert "no stepN" in blob          # class itself has no step method
+
+
+def test_structure_flags_no_pattern_class():
+    out = validate("x = 1\n", SEQ_IR)
+    assert out["structure"] != "pass"
+    assert any("no pattern class" in m for m in out["structure"])
+
+
+def test_structure_passes_with_loop_count_present():
+    src = (
+        "class P(UFSTC):\n"
+        "    def _loop1_step_1_1(self, loop_idx: int) -> None:\n"
+        "        pass\n"
+        "    def step1(self) -> None:\n"
+        "        for i in range(50):\n"
+        "            self._loop1_step_1_1(i)\n"
+    )
+    out = validate(src, LOOP_IR)
     assert out["structure"] == "pass"
 
 
 def test_structure_flags_missing_loop_count():
-    out = validate("x = 1\n", IR)
+    src = (
+        "class P(UFSTC):\n"
+        "    def _loop1_step_1_1(self, loop_idx: int) -> None:\n"
+        "        pass\n"
+        "    def step1(self) -> None:\n"
+        "        for i in range(10):\n"   # 50 absent
+        "            self._loop1_step_1_1(i)\n"
+    )
+    out = validate(src, LOOP_IR)
     assert out["structure"] != "pass"
+    assert any("loop_count" in m for m in out["structure"])
+
+
+def test_dataflow_catches_rerandomized_consume():
+    """step2 consumes max_lba but overwrites self.max_lba without reading it."""
+    bad = (
+        "import random\n"
+        "class P(UFSTC):\n"
+        "    def step1(self) -> None:\n"
+        "        self.max_lba = 100\n"
+        "    def step2(self) -> None:\n"
+        "        self.max_lba = random.randint(0, 9)\n"
+    )
+    out = validate(bad, SEQ_IR)
+    assert out["dataflow"] != "pass"
+    assert any("max_lba" in m for m in out["dataflow"])
+
+
+def test_dataflow_passes_when_threaded():
+    out = validate(GOOD, SEQ_IR)
+    assert out["dataflow"] == "pass"
 
 
 # ---------------------------------------------------------------------------

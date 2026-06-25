@@ -97,6 +97,32 @@ class TestCheckApiCalls:
         issues = check_api_calls(src, self._idx(tmp_path))
         assert any(i["kind"] == "too_many_positional" for i in issues)
 
+    def test_missing_required_arg_flagged(self, tmp_path):
+        # random_read requires cmd_count, min_lun, max_lun, need_compare, write_record
+        src = "def f(self):\n    api.random_read(cmd_count=1, min_lun=0)\n"
+        issues = check_api_calls(src, self._idx(tmp_path))
+        miss = [i for i in issues if i["kind"] == "missing_required_arg"]
+        assert miss
+        assert "max_lun" in miss[0]["detail"]
+        assert "write_record" in miss[0]["detail"]
+        assert "min_lun" not in miss[0]["detail"]   # supplied -> not reported
+
+    def test_required_args_satisfied_positionally(self, tmp_path):
+        src = "def f(self):\n    api.random_read(1, 0, 0, True, None)\n"
+        issues = check_api_calls(src, self._idx(tmp_path))
+        assert not [i for i in issues if i["kind"] == "missing_required_arg"]
+
+    def test_missing_required_skipped_on_kwargs_splat(self, tmp_path):
+        src = "def f(self):\n    api.random_read(**opts)\n"
+        issues = check_api_calls(src, self._idx(tmp_path))
+        assert not [i for i in issues if i["kind"] == "missing_required_arg"]
+
+    def test_default_arg_not_required(self, tmp_path):
+        # get_config_descriptors(print=False) -> no required args
+        src = "def f(self):\n    api.get_config_descriptors()\n"
+        issues = check_api_calls(src, self._idx(tmp_path))
+        assert issues == []
+
     def test_kwargs_func_accepts_any_kwarg(self, tmp_path):
         src = "def f(self):\n    api.flexible(a=1, anything=2, more=3)\n"
         assert check_api_calls(src, self._idx(tmp_path)) == []
