@@ -396,6 +396,103 @@ PROVENANCE:
   stepN method body (e.g. `# TODO-REVIEW-NO-CODE-REF`) so reviewers can grep it."""
 
 
+# Direct-Script variant: identical OUTPUT FORMAT, but code grounding is done by
+# reading the real Script source (candidates injected below) instead of calling
+# the gitnexus MCP server. Selected when PGConfig.grounding_mode == "direct".
+UNIT_GEN_INSTRUCTIONS_DIRECT = """\
+You are a UFS pattern generator. Generate the Python method for ONE unit only,
+grounded in TWO sources: the injected llm-wiki references and the injected Script
+code candidates (real symbols retrieved straight from the Script library).
+
+OUTPUT FORMAT — emit these sections IN ORDER (use these EXACT headers).
+The headers `=== CODE REFS ===` and `=== REVIEW FLAGS ===` are PARSED BY TOOLING —
+do NOT rename, merge, or replace them (e.g. with "=== GROUNDING LOG ==="); doing so
+silently blanks the grounding/review report.
+
+=== WIKI REFS ===
+<The wiki pages (from the injected "Wiki references" below) you actually used,
+ one per line as "path — why". If the injected wiki block says NO MATCH, write: NO MATCH>
+
+=== CODE REFS ===
+<The Script symbols you actually used, one per line as
+ "path: Symbol — signature". If no candidate is usable, write: NO MATCH>
+
+=== REVIEW FLAGS ===
+<Exactly one of these, or empty if both sources matched:
+   TODO-REVIEW-NO-WIKI      — wiki had NO MATCH but code refs were found
+   TODO-REVIEW-NO-CODE-REF  — wiki matched but no usable Script symbol was found
+   TODO-REVIEW-BOTH-MISS    — neither source matched>
+
+=== EXTRA IMPORTS ===
+<Import lines needed beyond scaffold standard imports. Omit section if none needed.>
+
+=== METHODS ===
+<The method definition(s) indented 4 spaces, ready to paste into a class body.>
+
+STANDARD IMPORTS ALREADY IN SCAFFOLD (do NOT repeat):
+  import package_root
+  from Script import api
+  from Script.lib import sdk_lib as lib
+  from Script.pattern.pattern_template import UFSTC
+  from Script.pattern.pattern_logger import logger
+  import Script.api.cmd_seq as ExecuteCMD
+
+STRUCTURE RULES:
+- This unit MUST become EXACTLY ONE method. See "STRUCTURE (this unit)" below for the
+  exact method name/signature and whether it is a stepN method or a loop helper.
+- Name the method EXACTLY as stated. A wrong name = dead code (stepN is auto-run by
+  `process()`; a loop helper is called by name from its stepN wrapper).
+- Carry forward outputs as self.<var> per the self.* CONTRACT below.
+- Do NOT generate class header, pre_process, post_process, or __main__ block.
+- You MUST generate the method even if a source is missing (see REVIEW FLAGS). For
+  any unresolved API write:
+    logger.warning("TODO human-confirm: <what is unresolved>")
+    # TODO human-confirm: <symbol or operation that needs verification>
+- Reuse helper methods already defined upstream (listed below); do NOT redefine them.
+
+GROUNDING (MANDATORY before writing any API call):
+  CODE  → Do NOT use gitnexus. Ground on the "## Code candidates" block injected below
+           (top-N real Script symbols with file:line + signature, retrieved directly
+           from the Script library). Then OPEN the real source to confirm before use:
+             - Use Read on the candidate's file:line, or Grep/Glob over the Script tree
+               (GitNexusMCP/Script/), to read the actual `def` and its exact signature.
+             - Script/ layout — pick the right folder:
+                 - Script/project_api/ : this project's CUSTOMER api — prefer for
+                                         customer-specific behaviour.
+                 - Script/api/         : protocol APIs implemented per the UFS Spec.
+                 - Script/pattern/sample_code/ : canonical calling idioms — copy them.
+                 - Script/lib/          : shared low-level libraries.
+           Record the symbols you relied on in === CODE REFS ===. Namespaces to verify:
+           FlagIDN (flags) vs AttributeIDN (attributes) are SEPARATE enums; never mix.
+           If no candidate fits and reading the tree finds nothing usable, do NOT invent
+           an API — flag NO-CODE-REF and tag the call # TODO human-confirm.
+
+           ANTI-CONFLATION (this is the #1 cause of broken patterns):
+           - Sibling functions in the SAME module routinely have DIFFERENT parameter
+             lists. Example: `sequential_write(lun, start_lba, total_size, chunk_size,
+             fua, ...)` vs `random_read(cmd_count, min_lun, max_lun, min_lba, max_lba,
+             min_size, max_size, need_compare, write_record)`. NEVER copy one
+             function's argument names onto another.
+           - READ the source of EACH symbol SEPARATELY and confirm its exact signature
+             (params, order, return) before writing the call. One lookup does not
+             license a whole family.
+           - Above EVERY api./ExecuteCMD./lib. call, paste the confirmed signature as
+             a comment:  # sig: <module>.<name>(<params>)  via reading the source file
+             This is a self-check; mismatched calls will be rejected by the validator.
+           - Do NOT call any symbol you have not confirmed exists by reading its source.
+             If you cannot confirm it, do not guess — emit TODO-REVIEW-NO-CODE-REF and
+             tag the call # TODO human-confirm.
+  WIKI  → Use ONLY the injected "Wiki references" block below (RRF top-5 + essence);
+           do not free-read the wiki. Conflict overrides shown there WIN
+           (Rule 1 CustomerReq>Spec, Rule 2 UserPrompt>ModelDefault — two independent
+           rules). Record the pages you used in === WIKI REFS ===.
+
+PROVENANCE:
+  Tag every grounded element:  # src[code]: <Script path>:<sym>  or  # src[wiki]: <wiki/path.md>
+  If a REVIEW FLAG applies, also put it as an inline comment on the FIRST line of the
+  stepN method body (e.g. `# TODO-REVIEW-NO-CODE-REF`) so reviewers can grep it."""
+
+
 def build_one_unit_prompt(
     ir: dict,
     unit: dict,
@@ -405,13 +502,21 @@ def build_one_unit_prompt(
     wiki_essence: str = "",
     wiki_top: list | None = None,
     wiki_has_match: bool = True,
+    grounding_mode: str = "gitnexus",
+    code_candidates: list | None = None,
 ) -> str:
     """Build the LLM generation prompt for a single unit (one step, or one loop).
 
     wiki_essence / wiki_top: the deterministically retrieved llm-wiki RRF top-5 and
     extractive essence for this unit (injected — the agent does not free-read wiki).
     wiki_has_match=False signals the agent to flag TODO-REVIEW-NO-WIKI / -BOTH-MISS.
+
+    grounding_mode="direct" swaps the gitnexus grounding instructions for the
+    Script-direct ones and injects `code_candidates` (top-N real symbols retrieved
+    from the Script library) instead of asking the model to call the MCP server.
     """
+    direct = grounding_mode == "direct"
+    instructions = UNIT_GEN_INSTRUCTIONS_DIRECT if direct else UNIT_GEN_INSTRUCTIONS
     kind = unit["kind"]
     if kind == "loop_wrapper":
         raise ValueError(
@@ -459,7 +564,7 @@ def build_one_unit_prompt(
         )
 
     parts = [
-        UNIT_GEN_INSTRUCTIONS,
+        instructions,
         f"Pattern: {ir.get('pattern_id')} — {ir.get('title', '')}",
         unit_desc,
         f"Method name: {method_note}",
@@ -500,8 +605,25 @@ def build_one_unit_prompt(
         parts.append(
             "## Wiki references: NO MATCH\n"
             "No relevant wiki page for this unit. You MUST emit TODO-REVIEW-NO-WIKI in "
-            "=== REVIEW FLAGS === (or TODO-REVIEW-BOTH-MISS if gitnexus also returns nothing)."
+            "=== REVIEW FLAGS === (or TODO-REVIEW-BOTH-MISS if the code source also returns nothing)."
         )
+
+    # Direct-Script grounding: inject the top-N candidate symbols (retrieved from the
+    # Script library) so the model grounds on real symbols and confirms by reading source.
+    if direct:
+        if code_candidates:
+            parts.append(
+                "## Code candidates (top-5) — real Script symbols; CONFIRM signatures by "
+                "reading the file (Read/Grep over GitNexusMCP/Script/)\n"
+                + "\n".join(f"- {c}" for c in code_candidates)
+            )
+        else:
+            parts.append(
+                "## Code candidates: NO MATCH\n"
+                "No candidate symbol retrieved for this unit. Grep GitNexusMCP/Script/ "
+                "directly; if nothing fits, emit TODO-REVIEW-NO-CODE-REF (or "
+                "TODO-REVIEW-BOTH-MISS if wiki also missed) and tag calls # TODO human-confirm."
+            )
 
     # Upstream continuity — embed already-generated methods so style/naming/helpers
     # stay consistent and missed dependencies can still be wired via self.*.
@@ -514,8 +636,10 @@ def build_one_unit_prompt(
             + upstream_methods.strip()
         )
     if upstream_code_refs:
+        reuse_note = ("reuse — no need to re-read the source" if direct
+                      else "reuse — no need to re-query gitnexus")
         parts.append(
-            "### Code refs already used upstream (reuse — no need to re-query gitnexus)\n"
+            f"### Code refs already used upstream ({reuse_note})\n"
             + "\n".join(upstream_code_refs)
         )
     if upstream_helpers:

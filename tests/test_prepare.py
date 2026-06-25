@@ -159,10 +159,65 @@ def test_first_unit_prompt_contains_grounding_rules(tmp_path):
     run = Path(out["run_dir"])
     prompt = (run / out["first_prompt_file"]).read_text(encoding="utf-8")
     assert "gitnexus" in prompt
+    assert "call the `query` tool" in prompt  # gitnexus-specific instruction
+    assert "## Code candidates" not in prompt  # injected only in direct mode
     assert "=== WIKI REFS ===" in prompt
     assert "=== CODE REFS ===" in prompt
     assert "=== REVIEW FLAGS ===" in prompt
     assert "=== METHODS ===" in prompt
+
+
+# ---------------------------------------------------------------------------
+# Direct grounding mode (no gitnexus): inject candidates from the Script tree
+# ---------------------------------------------------------------------------
+
+def _cfg_direct(tmp_path):
+    """Direct mode; script_root defaults to the real GitNexusMCP/Script tree."""
+    return PGConfig(generated_dir=tmp_path / "generated", grounding_mode="direct")
+
+
+_HAS_SCRIPT = (PGConfig().script_root / "api").is_dir()
+_skip_no_script = pytest.mark.skipif(not _HAS_SCRIPT, reason="GitNexusMCP/Script not present")
+
+
+def test_prepare_persists_grounding_meta(tmp_path):
+    """Both modes record _run_meta.json so prepare-unit can recover the mode."""
+    out = prepare_pattern(_write_ir(tmp_path), _cfg(tmp_path))
+    meta = json.loads((Path(out["run_dir"]) / "_run_meta.json").read_text(encoding="utf-8"))
+    assert meta["grounding_mode"] == "gitnexus"
+
+
+@_skip_no_script
+def test_prepare_direct_injects_candidates_and_swaps_instructions(tmp_path):
+    out = prepare_pattern(_write_ir(tmp_path), _cfg_direct(tmp_path))
+    run = Path(out["run_dir"])
+    meta = json.loads((run / "_run_meta.json").read_text(encoding="utf-8"))
+    assert meta["grounding_mode"] == "direct"
+
+    prompt = (run / out["first_prompt_file"]).read_text(encoding="utf-8")
+    # direct instructions swapped in; gitnexus query instruction gone
+    assert "Do NOT use gitnexus" in prompt
+    assert "call the `query` tool" not in prompt
+    # candidate block injected with real Script symbols (phase_0/s1 = WRITE(10))
+    assert "## Code candidates" in prompt
+    assert "script rank1" in prompt
+    # parsed section headers are unchanged (assemble still works)
+    assert "=== CODE REFS ===" in prompt
+
+
+@_skip_no_script
+def test_prepare_unit_recovers_direct_mode_from_meta(tmp_path):
+    """prepare-unit (separate CLI call, default gitnexus config) honors the run's
+    persisted direct mode and still injects candidates."""
+    out = prepare_pattern(_write_ir(tmp_path), _cfg_direct(tmp_path))
+    run = Path(out["run_dir"])
+    (run / "unit_01_s1_methods.py").write_text(UPSTREAM_METHODS, encoding="utf-8")
+
+    # NB: default config (gitnexus) — mode must come from _run_meta.json.
+    res = prepare_unit(run, 2, _cfg(tmp_path))
+    prompt = (run / res["prompt_file"]).read_text(encoding="utf-8")
+    assert "## Code candidates" in prompt
+    assert "Do NOT use gitnexus" in prompt
 
 
 # ---------------------------------------------------------------------------

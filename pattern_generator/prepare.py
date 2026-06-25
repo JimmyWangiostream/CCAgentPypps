@@ -57,6 +57,34 @@ def _unit_wiki(unit: dict, wiki_path) -> dict:
     }
 
 
+def _unit_code(unit: dict, script_root, k: int = 5) -> list:
+    """Top-k candidate Script symbols for a unit (direct-grounding injection).
+
+    Mirrors _unit_wiki: builds the same cmd/idn/name query and asks the
+    code_retrieval index (no gitnexus) for real symbols to inject as candidates.
+    """
+    from code_retrieval.retrieve import retrieve_code
+    query = _unit_query(unit).strip()
+    if not query:
+        return []
+    return [r.render() for r in retrieve_code(query, script_root, k=k)]
+
+
+def _resolve_grounding_mode(run_dir: Path, config: PGConfig) -> str:
+    """Grounding mode for a downstream unit: the run's persisted mode (written by
+    prepare_pattern) wins, since prepare-unit is a separate CLI call. A non-default
+    config value still overrides (explicit --grounding on prepare-unit)."""
+    if config.grounding_mode != "gitnexus":
+        return config.grounding_mode
+    meta = run_dir / "_run_meta.json"
+    if meta.exists():
+        try:
+            return json.loads(meta.read_text(encoding="utf-8")).get("grounding_mode", "gitnexus")
+        except (OSError, ValueError):
+            pass
+    return "gitnexus"
+
+
 def _gather_upstream(run_dir: Path, target_index: int) -> tuple[str, list, list]:
     """Collect already-generated upstream unit methods for continuity.
 
@@ -100,6 +128,14 @@ def prepare_pattern(ir_path, config: PGConfig | None = None) -> dict:
     run.write_json("1_units.json", units)
     run.write_text("scaffold.py", scaffold)
 
+    # Persist the grounding mode so downstream prepare-unit calls (separate CLI
+    # invocations) reuse it without re-passing --grounding. Gitnexus runs (default)
+    # also record it for transparency.
+    run.write_json("_run_meta.json", {
+        "grounding_mode": config.grounding_mode,
+        "script_root": str(config.script_root),
+    })
+
     # Make the run dir self-contained so prepare_unit can find the IR later,
     # regardless of where the source IR file lived. Keep the *-ir.json suffix
     # so prepare_unit's glob matches.
@@ -120,10 +156,14 @@ def prepare_pattern(ir_path, config: PGConfig | None = None) -> dict:
     first_unit = next((u for u in units if u["kind"] != "loop_wrapper"), None)
     if first_unit is not None:
         wiki = _unit_wiki(first_unit, config.wiki_path)
+        code_candidates = (_unit_code(first_unit, config.script_root)
+                           if config.grounding_mode == "direct" else None)
         prompt = build_one_unit_prompt(
             ir, first_unit,
             wiki_essence=wiki["essence"], wiki_top=wiki["top"],
             wiki_has_match=wiki["has_match"],
+            grounding_mode=config.grounding_mode,
+            code_candidates=code_candidates,
         )
         first_prompt_file = _unit_prompt_filename(first_unit)
         run.write_text(first_prompt_file, prompt)
@@ -179,7 +219,9 @@ def prepare_unit(run_dir, unit_index: int, config: PGConfig | None = None) -> di
 
     methods_text, code_refs, helpers = _gather_upstream(run_dir, unit_index)
     cfg = config or PGConfig()
+    mode = _resolve_grounding_mode(run_dir, cfg)
     wiki = _unit_wiki(unit, cfg.wiki_path)
+    code_candidates = (_unit_code(unit, cfg.script_root) if mode == "direct" else None)
     prompt = build_one_unit_prompt(
         ir, unit,
         upstream_methods=methods_text,
@@ -187,6 +229,8 @@ def prepare_unit(run_dir, unit_index: int, config: PGConfig | None = None) -> di
         upstream_helpers=helpers,
         wiki_essence=wiki["essence"], wiki_top=wiki["top"],
         wiki_has_match=wiki["has_match"],
+        grounding_mode=mode,
+        code_candidates=code_candidates,
     )
     fname = _unit_prompt_filename(unit)
     (run_dir / fname).write_text(prompt, encoding="utf-8")

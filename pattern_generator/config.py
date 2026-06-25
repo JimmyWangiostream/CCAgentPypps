@@ -17,6 +17,11 @@ class PGConfig:
     # Root of the grounded Script/ library (gitnexus-indexed), used by the
     # api-grounding reality check in the validator.
     script_root: Path = field(default_factory=lambda: REPO_ROOT / "GitNexusMCP" / "Script")
+    # Code-grounding source for unit prompts:
+    #   "gitnexus" (default) — prompt tells the model to call the gitnexus MCP tools
+    #   "direct"             — inject top-N candidate symbols retrieved straight from
+    #                          script_root (code_retrieval); no MCP server involved.
+    grounding_mode: str = "gitnexus"
 
     def __post_init__(self):
         self.repo_root = Path(self.repo_root)

@@ -27,11 +27,19 @@ def main():
 
     p2 = sub.add_parser("prepare", help="IR json -> scaffold + units + first unit prompt")
     p2.add_argument("ir_file")
+    p2.add_argument("--grounding", choices=["gitnexus", "direct"], default="gitnexus",
+                    help="code grounding: 'gitnexus' (default, MCP) or 'direct' "
+                         "(inject candidates straight from Script; no MCP server)")
+    p2.add_argument("--generated-dir", default=None,
+                    help="output base dir (default: PGConfig.generated_dir; "
+                         "for --grounding direct: <repo>/generate_without_gitnexus)")
 
     pu = sub.add_parser("prepare-unit",
                         help="build unit N's prompt (embeds upstream unit methods)")
     pu.add_argument("run_dir", help="generated/<ID>/ directory")
     pu.add_argument("unit_index", type=int, help="1-based unit number")
+    pu.add_argument("--grounding", choices=["gitnexus", "direct"], default=None,
+                    help="override grounding mode (default: read from run dir's _run_meta.json)")
 
     pa = sub.add_parser("assemble", help="scaffold.py + phase_*_methods.py -> final .py")
     pa.add_argument("run_dir", help="generated/<ID>/ directory")
@@ -56,7 +64,15 @@ def main():
         out = finalize_ir(bundle["skeleton"], annotations, bundle["wiki_refs"], Config())
         print(f"Final IR: {out}")
     elif args.cmd == "prepare":
-        out = prepare_pattern(Path(args.ir_file), PGConfig())
+        base = PGConfig()
+        if args.generated_dir:
+            gen_dir = Path(args.generated_dir)
+        elif args.grounding == "direct":
+            gen_dir = base.repo_root / "generate_without_gitnexus"
+        else:
+            gen_dir = base.generated_dir
+        cfg = PGConfig(generated_dir=gen_dir, grounding_mode=args.grounding)
+        out = prepare_pattern(Path(args.ir_file), cfg)
         print(f"Run dir: {out['run_dir']}")
         print(f"Units: {out['unit_count']} (one stepN per step/loop-wrapper; loop "
               f"sub-steps are helper methods)")
@@ -71,7 +87,8 @@ def main():
                   "automatically and reports 'skip'; do NOT hand-write their methods.)")
         print(f"Finally: python generate_pattern.py assemble {out['run_dir']} <PatternName>")
     elif args.cmd == "prepare-unit":
-        out = prepare_unit(Path(args.run_dir), args.unit_index, PGConfig())
+        cfg = PGConfig(grounding_mode=args.grounding) if args.grounding else PGConfig()
+        out = prepare_unit(Path(args.run_dir), args.unit_index, cfg)
         if out.get("skipped"):
             print(f"Unit {out['unit_index']}/{out['unit_count']}: loop wrapper — "
                   f"deterministic methods file already written; skip (no LLM prompt).")
