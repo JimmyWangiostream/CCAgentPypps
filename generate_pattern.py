@@ -52,6 +52,11 @@ def main():
                     help="Root of the Script/ library for the API-reality check "
                          "(default: PGConfig.script_root)")
 
+    pr = sub.add_parser("review",
+                        help="build the review->repair prompt (checkpoints + rule pack + code)")
+    pr.add_argument("py_file")
+    pr.add_argument("ir_file")
+
     args = ap.parse_args()
 
     if args.cmd == "prepare-ir":
@@ -110,6 +115,17 @@ def main():
         script_root = args.script_root or PGConfig().script_root
         report = validate(src, ir, script_root=script_root)
         print(json.dumps(report, ensure_ascii=False, indent=2))
+    elif args.cmd == "review":
+        from pattern_generator.review import build_review_prompt
+        ir = json.loads(Path(args.ir_file).read_text(encoding="utf-8"))
+        py_file = Path(args.py_file)
+        src = py_file.read_text(encoding="utf-8")
+        prompt = build_review_prompt(src, ir)
+        out_path = py_file.with_name(py_file.stem + "_review_prompt.txt")
+        out_path.write_text(prompt, encoding="utf-8")
+        print(f"Review prompt: {out_path}")
+        print(f"Next (LLM): read it, write the corrected {py_file.name}, then "
+              f"re-run: python generate_pattern.py validate {py_file.name} {Path(args.ir_file).name}")
 
 
 if __name__ == "__main__":
