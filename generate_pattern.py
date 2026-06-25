@@ -57,6 +57,13 @@ def main():
     pr.add_argument("py_file")
     pr.add_argument("ir_file")
 
+    pw = sub.add_parser("prepare-wholefile",
+                        help="Stage 3: scaffold + ONE whole-file authoring prompt "
+                             "(idiom anchors + rule pack + data-flow contract)")
+    pw.add_argument("ir_file")
+    pw.add_argument("--generated-dir", default=None)
+    pw.add_argument("--script-root", default=None)
+
     args = ap.parse_args()
 
     if args.cmd == "prepare-ir":
@@ -115,6 +122,23 @@ def main():
         script_root = args.script_root or PGConfig().script_root
         report = validate(src, ir, script_root=script_root)
         print(json.dumps(report, ensure_ascii=False, indent=2))
+    elif args.cmd == "prepare-wholefile":
+        from pattern_generator.wholefile import build_wholefile_prompt
+        from pattern_generator.run_logger import RunDir
+        from pattern_generator.stepwise import build_scaffold
+        base = PGConfig()
+        gen_dir = Path(args.generated_dir) if args.generated_dir else base.generated_dir
+        script_root = args.script_root or base.script_root
+        ir = json.loads(Path(args.ir_file).read_text(encoding="utf-8"))
+        run = RunDir(gen_dir, ir["pattern_id"])
+        scaffold = build_scaffold(ir)
+        run.write_text("scaffold.py", scaffold)
+        prompt = build_wholefile_prompt(ir, script_root, scaffold=scaffold)
+        run.write_text("wholefile_prompt.txt", prompt)
+        print(f"Run dir: {run.path}")
+        print(f"Next (LLM): read {run.path}/wholefile_prompt.txt → write the COMPLETE "
+              f"<PatternName>.py in {gen_dir}")
+        print(f"Then: python generate_pattern.py validate {gen_dir}/<PatternName>.py {args.ir_file}")
     elif args.cmd == "review":
         from pattern_generator.review import build_review_prompt
         ir = json.loads(Path(args.ir_file).read_text(encoding="utf-8"))
