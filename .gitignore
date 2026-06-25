@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Type-check / test caches
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# gitnexus index (large; rebuildable via .gitnexus/run.cjs analyze)
+.gitnexus/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp

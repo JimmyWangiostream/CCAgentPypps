@@ -1,0 +1,22 @@
+{
+  "phases": [
+    {
+      "phase_id": "phase_0",
+      "inputs": [],
+      "outputs": ["max_lba"]
+    },
+    {
+      "phase_id": "loop_4",
+      "inputs": ["max_lba"],
+      "outputs": []
+    }
+  ],
+  "edges": [
+    {
+      "from": "phase_0",
+      "to": "loop_4",
+      "type": "sequential",
+      "data_flow": ["max_lba"]
+    }
+  ]
+}

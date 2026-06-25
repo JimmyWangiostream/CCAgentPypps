@@ -1,0 +1,41 @@
+{
+  "phases": [
+    {
+      "phase_id": "phase_0",
+      "inputs": [],
+      "outputs": ["max_lba", "max_alloc_units", "wb_supported"],
+      "steps": [
+        {"step_id": "step_0_1", "produces": [], "consumes": []},
+        {"step_id": "step_0_2", "produces": ["max_lba"], "consumes": []},
+        {"step_id": "step_0_3", "produces": ["wb_supported"], "consumes": []},
+        {"step_id": "step_0_4", "produces": ["max_alloc_units"], "consumes": []},
+        {"step_id": "step_0_5", "produces": ["config_descriptor_data"], "consumes": []},
+        {"step_id": "step_0_6", "produces": [], "consumes": ["max_alloc_units", "config_descriptor_data"]}
+      ]
+    },
+    {
+      "phase_id": "loop_4",
+      "inputs": ["max_lba"],
+      "outputs": [],
+      "steps": [
+        {"step_id": "step_1_1", "produces": [], "consumes": []},
+        {"step_id": "step_1_2", "produces": [], "consumes": []},
+        {"step_id": "step_1_3", "produces": ["write_lba", "write_len", "write_data"], "consumes": ["max_lba"]},
+        {"step_id": "step_1_4", "produces": [], "consumes": ["write_lba", "write_len", "write_data"]},
+        {"step_id": "step_1_5", "produces": [], "consumes": []},
+        {"step_id": "step_1_6", "produces": [], "consumes": []},
+        {"step_id": "step_2_1", "produces": ["write_lba", "write_len", "write_data"], "consumes": ["max_lba"]},
+        {"step_id": "step_2_2", "produces": [], "consumes": []},
+        {"step_id": "step_2_3", "produces": [], "consumes": ["write_lba", "write_len", "write_data"]},
+        {"step_id": "step_2_4", "produces": [], "consumes": []},
+        {"step_id": "step_2_5", "produces": [], "consumes": []},
+        {"step_id": "step_3_3", "produces": [], "consumes": []},
+        {"step_id": "step_3_4", "produces": [], "consumes": []},
+        {"step_id": "step_3_5", "produces": [], "consumes": []}
+      ]
+    }
+  ],
+  "edges": [
+    {"from": "phase_0", "to": "loop_4", "type": "sequential", "data_flow": ["max_lba"]}
+  ]
+}

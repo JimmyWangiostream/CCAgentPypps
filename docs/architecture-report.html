@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>UFS Pattern Generator — 架構報告</title>
+<style>
+  :root {
+    --code: #2563eb; --code-bg: #eff6ff;
+    --wiki: #059669; --wiki-bg: #ecfdf5;
+    --llm:  #7c3aed; --llm-bg: #f5f3ff;
+    --py:   #475569; --py-bg: #f1f5f9;
+    --warn: #d97706; --warn-bg: #fffbeb;
+    --risk: #dc2626; --risk-bg: #fef2f2;
+    --ink: #1e293b; --muted: #64748b; --line: #e2e8f0;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, "Segoe UI", "Microsoft JhengHei", sans-serif;
+    color: var(--ink); line-height: 1.6; margin: 0; background: #f8fafc; }
+  .wrap { max-width: 1000px; margin: 0 auto; padding: 32px 24px 80px; }
+  h1 { font-size: 30px; margin: 0 0 4px; }
+  h2 { font-size: 22px; margin: 44px 0 14px; padding-bottom: 8px; border-bottom: 2px solid var(--line); }
+  h3 { font-size: 17px; margin: 26px 0 10px; }
+  .sub { color: var(--muted); font-size: 15px; margin-bottom: 8px; }
+  code { font-family: "SF Mono", Consolas, monospace; font-size: 0.88em;
+    background: #eef2f7; padding: 1px 5px; border-radius: 4px; }
+  pre { background: #0f172a; color: #e2e8f0; padding: 14px 16px; border-radius: 8px;
+    overflow-x: auto; font-size: 13px; line-height: 1.5; }
+  pre code { background: none; color: inherit; padding: 0; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 14px; }
+  th, td { border: 1px solid var(--line); padding: 8px 10px; text-align: left; vertical-align: top; }
+  th { background: #f1f5f9; }
+  .tag { display: inline-block; font-size: 11px; font-weight: 700; padding: 2px 8px;
+    border-radius: 999px; letter-spacing: .3px; }
+  .t-code { color: var(--code); background: var(--code-bg); }
+  .t-wiki { color: var(--wiki); background: var(--wiki-bg); }
+  .t-llm  { color: var(--llm);  background: var(--llm-bg); }
+  .t-py   { color: var(--py);   background: var(--py-bg); }
+  .card { background: #fff; border: 1px solid var(--line); border-radius: 10px;
+    padding: 16px 18px; margin: 12px 0; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .why { border-left: 4px solid var(--llm); }
+  .why .q { color: var(--risk); font-weight: 600; }
+  .why .a { color: var(--wiki); font-weight: 600; }
+  /* pipeline */
+  .pipe { display: flex; flex-wrap: wrap; align-items: stretch; gap: 0; margin: 18px 0; }
+  .stage { flex: 1 1 0; min-width: 120px; border-radius: 8px; padding: 10px 8px; text-align: center;
+    font-size: 12.5px; position: relative; border: 1px solid var(--line); }
+  .stage b { display: block; font-size: 13px; margin-bottom: 2px; }
+  .stage.py { background: var(--py-bg); }
+  .stage.llm { background: var(--llm-bg); }
+  .arrow { align-self: center; color: var(--muted); font-size: 20px; padding: 0 4px; }
+  .legend { font-size: 13px; color: var(--muted); margin-top: 6px; }
+  .files { font-size: 11px; color: var(--muted); margin-top: 4px; }
+  .banner { background: linear-gradient(90deg,#1e293b,#334155); color:#fff; border-radius:12px;
+    padding: 20px 24px; margin-bottom: 8px; }
+  .banner h1 { color: #fff; }
+  .banner .sub { color: #cbd5e1; }
+  ul.tight { margin: 6px 0; padding-left: 22px; }
+  ul.tight li { margin: 3px 0; }
+  .kbd { font-size: 12px; color: var(--muted); }
+  .ok { color: var(--wiki); font-weight: 600; }
+  .bad { color: var(--risk); font-weight: 600; }
+  .note { background: var(--warn-bg); border-left: 4px solid var(--warn); padding: 10px 14px;
+    border-radius: 6px; margin: 12px 0; font-size: 14px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="banner">
+    <h1>UFS Pattern Generator — 架構報告</h1>
+    <div class="sub">TC Flow → IR → Pattern (.py) ｜ 以 <b>PF002_0098 Boot Stress Test</b> 為例</div>
+  </div>
+
+  <p>這套系統把測試案例流程(TC)自動轉成可執行的 UFS 測試 Pattern(<code>.py</code>)。
+  每個產生的程式碼都<b>紮根於兩個真實來源</b>:程式碼知識圖譜(understand-anything)
+  與整合過的知識庫(llm-wiki)。所有 LLM 步驟用<b>當前模型</b>執行,無需 API key。</p>
+
+  <div class="card">
+    <b>三個核心原則</b>
+    <ul class="tight">
+      <li><span class="tag t-py">確定性</span> Python 只做可重現的工作:解析、查詢、組裝、驗證。</li>
+      <li><span class="tag t-llm">當前模型</span> 推理步驟(標註、生成、grounding)交給驅動的模型,不綁特定供應商。</li>
+      <li><b>雙來源 grounding</b>:<span class="tag t-code">code</span> 答「怎麼實作」、<span class="tag t-wiki">wiki</span> 答「規格/客戶約束」。</li>
+    </ul>
+  </div>
+
+  <!-- ============ FLOW ============ -->
+  <h2>整體流程圖</h2>
+  <div class="sub">6 個步驟,Python(灰)與 LLM(紫)交替。所有產物落在 <code>generated/&lt;PATTERN_ID&gt;/</code>。</div>
+
+  <div class="pipe">
+    <div class="stage py"><b>① prepare-ir</b>TC.md 解析<div class="files">→ ir_skeleton.json<br>→ enrich_prompt.txt</div></div>
+    <div class="arrow">→</div>
+    <div class="stage llm"><b>② LLM A</b>標註資料流<div class="files">→ annotations.json</div></div>
+    <div class="arrow">→</div>
+    <div class="stage py"><b>③ finalize-ir</b>合併成 IR<div class="files">→ &lt;id&gt;-ir.json<br>→ -ir-debug.md</div></div>
+    <div class="arrow">→</div>
+    <div class="stage py"><b>④ prepare</b>拓撲攤平<div class="files">→ 1_steps.json<br>→ generation_prompt.txt</div></div>
+    <div class="arrow">→</div>
+    <div class="stage llm"><b>⑤ LLM B</b>生成 + grounding<div class="files">→ &lt;Pattern&gt;.py<br>→ provenance.json</div></div>
+    <div class="arrow">→</div>
+    <div class="stage py"><b>⑥ validate</b>語法/結構/import<div class="files">→ 報告</div></div>
+  </div>
+  <div class="legend">⑤ 的 grounding 同時查兩個來源(見下圖)。① 的 wiki 也用 ingested 查詢。</div>
+
+  <h3>生成階段(⑤)的雙來源 grounding</h3>
+  <div class="pipe">
+    <div class="stage py" style="flex:1.3"><b>每個 step 的意圖</b>(來自 IR / step plan)<div class="files">scsi_cmd / ufs_query / opcode / idn / loop / for_each</div></div>
+    <div class="arrow">→</div>
+    <div style="flex:1.4; display:flex; flex-direction:column; gap:8px;">
+      <div class="stage" style="background:var(--code-bg)"><b style="color:var(--code)">code · understand-anything graph</b>
+        <code>graph_query.py &lt;symbol&gt;</code> → file:line + 呼叫關係 → 讀真實原始碼</div>
+      <div class="stage" style="background:var(--wiki-bg)"><b style="color:var(--wiki)">wiki · ingested llm-wiki</b>
+        讀 conflicts.md → entities/concepts → 套用優先序</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="stage llm" style="flex:1"><b>當前模型生成</b>紮根的 Pattern + provenance</div>
+  </div>
+
+  <!-- ============ IR DETAIL ============ -->
+  <h2>IR 實作細節</h2>
+  <p class="sub">IR(Intermediate Representation)是 TC 與生成之間的橋樑。
+  <b>為什麼需要它?</b>整個 Pattern 一次丟給模型 → 粒度太粗、精度差;每個 step 獨立生成 → 丟失 phase 間依賴。
+  IR 用 dependency graph 描述 phase 順序與資料流,讓模型<b>以 step 為單位、以 phase 為 context</b> 生成。</p>
+
+  <h3>IR 產生的 3 個階段(<code>ir_generator/</code>)</h3>
+  <div class="pipe">
+    <div class="stage py" style="flex:1.2"><b>Stage 1 · parser.py</b>規則式解析 markdown
+      <div class="files">## Phase / ## Loop / ### Step → 抽 SCSI CMD / UFS Query / opcode / idn / expected</div></div>
+    <div class="arrow">→</div>
+    <div class="stage" style="background:var(--wiki-bg);flex:1.1"><b style="color:var(--wiki)">Stage 2 · wiki_lookup.py</b>查 ingested wiki
+      <div class="files">per-phase entities/concepts + 全域 conflicts.md</div></div>
+    <div class="arrow">→</div>
+    <div class="stage llm" style="flex:1"><b>Stage 3 · LLM A</b>標註資料流
+      <div class="files">phase inputs/outputs + edge data_flow</div></div>
+  </div>
+  <div class="legend">Stage 1/2 是確定性 Python;Stage 3 由當前模型做。最後 <code>finalize-ir</code> 把骨架 + 標註合併成 IR。</div>
+
+  <h3>parser 抽取的內容(確定性,無 LLM)</h3>
+  <table>
+    <tr><th>項目</th><th>來源 / 規則</th></tr>
+    <tr><td>Phase</td><td><code>## Phase N</code> / <code>## Phase F</code>(regex <code>[0-9A-Za-z]+</code>,支援字母 phase)/ <code>## Loop</code></td></tr>
+    <tr><td>Step</td><td><code>### Step X.Y</code> / <code>#### Step X.Y</code></td></tr>
+    <tr><td>SCSI / UFS / opcode / idn</td><td>step 區塊內的 <code>**SCSI CMD**</code> / <code>**UFS QUERY**</code> + 表格的 Opcode / Query Opcode / IDN</td></tr>
+    <tr><td>Loop 類型</td><td>標題含 <code>(N 次)</code> → <code>count</code>;否則 <code>condition</code>;<code>iterate_over</code> → <code>for_each</code></td></tr>
+    <tr><td>fail_condition</td><td>expected 含 <code>!=</code> / <code>== 0x</code> / <code>Data Match</code> → 自動加 <code>fail_condition</code> + <code>on_fail: abort</code></td></tr>
+  </table>
+
+  <h3>IR JSON 結構(以 PF002_0098)</h3>
+  <pre><code>{
+  "pattern_id": "PF002_0098",
+  "phases": [
+    { "phase_id": "phase_0", "type": "sequential",
+      "outputs": ["boot_lun_id"],            // ← Stage 3 (LLM) 補
+      "steps": [
+        { "step_id": "step_0_4", "ufs_query": "WRITE ATTRIBUTE",
+          "query_opcode": "0x04", "idn": "0x00 (bBootLunEn)",
+          "expected": "QUERY RESPONSE Success" },
+        { "step_id": "step_0_5", "expected": "bBootLunEn != 0x00",
+          "fail_condition": "bBootLunEn == 0x00", "on_fail": "abort" }   // ← parser 自動偵測
+      ] },
+    { "phase_id": "loop_stress", "type": "loop",
+      "loop_type": "count", "loop_count": 100,
+      "inputs": ["boot_lun_id", "write_pattern"] }
+  ],
+  "dependency_graph": {                        // ← Stage 3 (LLM) 補
+    "nodes": ["phase_0", "phase_1", "loop_stress"],
+    "edges": [ { "from": "phase_0", "to": "phase_1",
+                 "type": "sequential", "data_flow": ["boot_lun_id"] } ]
+  }
+}</code></pre>
+  <div class="legend">Stage 1 產出 phases/steps(含 fail_condition);Stage 3 補上 <code>inputs/outputs</code> 與 <code>dependency_graph.edges</code> 的 <code>data_flow</code>。生成階段(④)再把它拓撲排序攤平成 step plan。</div>
+
+  <!-- ============ ARCHITECTURE ============ -->
+  <h2>兩個知識來源</h2>
+  <div class="grid2">
+    <div class="card" style="border-top:3px solid var(--code)">
+      <span class="tag t-code">code</span> <b>understand-anything 知識圖譜</b>
+      <div class="sub"><code>.understand-anything/knowledge-graph.json</code></div>
+      <ul class="tight">
+        <li>對 repo 內 <code>api/ lib/ pattern/</code>(893 檔)做結構分析</li>
+        <li>nodes(函數/類別/檔案)+ edges(<code>calls</code> / <code>contains</code> / <code>imports</code>)</li>
+        <li>查詢工具 <code>graph_query.py</code>:名字 → file:line + 呼叫鏈,再讀真實原始碼</li>
+        <li>回答<b>「怎麼實作」</b>:真實函數、import、組合方式</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top:3px solid var(--wiki)">
+      <span class="tag t-wiki">wiki</span> <b>llm-wiki(ingested)</b>
+      <div class="sub"><code>wiki/</code> — Karpathy LLM-Wiki + 衝突解決</div>
+      <ul class="tight">
+        <li>ingest 6 個來源(Spec / CustomerReq / UserPrompt / Script / ProNoun / ModelDefault)</li>
+        <li>衝突規則:<b>CustomerReq &gt; Spec</b>、<b>UserPrompt &gt; ModelDefault</b></li>
+        <li>查詢 = 導航 <code>index.md</code> → 讀 entities/concepts → 查 <code>conflicts.md</code></li>
+        <li>回答<b>「規格 / 客戶約束」</b>:合法值、前置條件、覆蓋規則</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ============ WIKI PRIORITY ============ -->
+  <h2>llm-wiki 衝突優先度</h2>
+  <p class="sub">ingest 時,6 個知識源若對同一參數有不同值,依優先度解決。
+  這是 wiki grounding 能勝過 raw Spec 的關鍵,也是必須讀 ingested wiki(而非關鍵字搜尋)的原因。</p>
+
+  <h3>優先序(高 → 低)</h3>
+  <div class="pipe">
+    <div class="stage" style="background:var(--wiki-bg)"><b>1 · CustomerReq</b>客戶要求(最高)</div>
+    <div class="arrow">›</div>
+    <div class="stage"><b>2 · UserPrompt</b>工程師指引</div>
+    <div class="arrow">›</div>
+    <div class="stage"><b>3 · Script</b>現有 pattern</div>
+    <div class="arrow">›</div>
+    <div class="stage"><b>4 · ProNoun</b>術語</div>
+    <div class="arrow">›</div>
+    <div class="stage"><b>5 · ModelDefault</b>預設值</div>
+    <div class="arrow">›</div>
+    <div class="stage" style="background:var(--py-bg)"><b>6 · Spec</b>UFS 規格(最低)</div>
+  </div>
+
+  <h3>兩條「刪除規則」(落敗的值會被移除)</h3>
+  <table>
+    <tr><th>規則</th><th>衝突</th><th>結果</th></tr>
+    <tr><td><b>Rule 1</b></td><td>CustomerReq vs Spec</td><td><span class="ok">CustomerReq 勝</span>,Spec 值<b>刪除</b></td></tr>
+    <tr><td><b>Rule 2</b></td><td>UserPrompt vs ModelDefault</td><td><span class="ok">UserPrompt 勝</span>,ModelDefault 值<b>刪除</b></td></tr>
+    <tr><td>其他</td><td>任何其他組合(如 Spec vs Script)</td><td>兩者都保留並標註</td></tr>
+  </table>
+
+  <h3>實際解決的 2 個衝突(<code>wiki/conflicts.md</code>)</h3>
+  <table>
+    <tr><th>#</th><th>規則</th><th>覆蓋內容</th><th>對 pattern 的影響</th></tr>
+    <tr><td>1</td><td><span class="tag t-wiki">CustomerReq &gt; Spec</span></td>
+      <td>WriteBooster 的 Attribute/Flag 操作:LUN 必須是 Normal、非 Boot、index 0–7,否則回 <code>invalid INDEX</code>。(Spec 原本無此限制 → 已刪除)</td>
+      <td>生成時要驗證 WB LUN：<code>_assert_valid_wb_lun()</code></td></tr>
+    <tr><td>2</td><td><span class="tag t-wiki">UserPrompt &gt; ModelDefault</span></td>
+      <td>未指定 LUN 時 = 容量最大的 Enabled LUN(ModelDefault 的 <code>lun=0</code> → 已刪除)</td>
+      <td>不可寫死 <code>lun=0</code>:<code>_select_default_lun()</code></td></tr>
+  </table>
+  <div class="note"><b>為何重要:</b>這兩條覆蓋只有讀 ingested wiki(<code>conflicts.md</code> + entities)才看得到。
+  若用 raw Spec 或關鍵字搜尋,會誤用 Spec 的寬鬆值 → 生成錯誤的 pattern。
+  (PF003 第一版用 grep 就犯了寫死 <code>lun=0</code> 的錯,改用 ingested wiki 後才修正。)</div>
+
+  <!-- ============ WHY ============ -->
+  <h2>為什麼這樣設計</h2>
+
+  <div class="card why">
+    <div><span class="q">問題:</span>能不能用 <code>/understand-knowledge</code> 把 code 和 wiki 合併成一張圖?</div>
+    <div><span class="a">決定:</span>不行。它會覆蓋 code graph、不建立跨來源連結、把 .py 當純文字。
+    所以「結合」改在<b>生成階段</b>做,兩個來源各自保持最擅長的形式。(方案 A)</div>
+  </div>
+
+  <div class="card why">
+    <div><span class="q">問題:</span>第一版用「key 比對」事先抓 grounding,結果如何?</div>
+    <div><span class="a">決定:</span>產生<b>假陽性</b>——名字子字串比對把 <code>WRITE(10)</code> 接到 <code>write_attribute</code>、
+    <code>TEST UNIT READY</code> 接到 <code>is_tester_cmd</code>。比查不到更危險(看起來成功卻是錯的)。
+    改成<b>逐 step 生成 + 即時查圖譜</b>,丟掉整個 key 機制。</div>
+  </div>
+
+  <div class="card why">
+    <div><span class="q">問題:</span>code grounding 為何要走圖譜而非 <code>grep</code>?</div>
+    <div><span class="a">決定:</span>圖譜給<b>結構化定位</b>(file:line + 呼叫鏈),比文字搜尋精確,
+    且能讀到真實原始碼切片。<code>grep</code> 容易因命名假設而漏(見下方 debug 案例)。</div>
+  </div>
+
+  <div class="card why">
+    <div><span class="q">問題:</span>wiki grounding 為何不能用關鍵字搜尋?</div>
+    <div><span class="a">決定:</span>關鍵字搜尋會<b>繞過衝突解決</b>。例如 PF003 的「預設 LUN」——
+    raw Spec 沒限制,但 UserPrompt 覆蓋成「容量最大的 LUN」;WriteBooster 的 LUN 限制來自 CustomerReq。
+    只有讀 <code>conflicts.md</code> + ingested 頁面才看得到這些覆蓋。</div>
+  </div>
+
+  <div class="card why">
+    <div><span class="q">問題:</span>為何拿掉 API key、用當前模型?</div>
+    <div><span class="a">決定:</span>讓系統<b>可攜到任何 agent</b>(如 Hermes),不綁 Claude Code、不需 anthropic SDK。
+    誰驅動就用誰的模型。runtime 只需 Python 3.10+ 與 repo 本身。</div>
+  </div>
+
+  <!-- ============ EXAMPLE ============ -->
+  <h2>實例:PF002_0098 Boot Stress Test</h2>
+  <p class="sub">驗證 Boot LU 在反覆 Reset + Reboot 壓力下的資料完整性。</p>
+
+  <h3>TC 的結構(3 個 phase)</h3>
+  <table>
+    <tr><th>Phase</th><th>內容</th></tr>
+    <tr><td><b>phase_0</b> 配置與啟用</td><td>TUR → 讀 Device Descriptor → 讀/寫/確認 bBootLunEn → 讀 Unit Descriptor</td></tr>
+    <tr><td><b>phase_1</b> 寫入測試資料</td><td>WRITE(10) 寫 Boot LU → READ(10) 比對</td></tr>
+    <tr><td><b>loop_stress</b> 壓力迴圈 ×100</td><td>for_each [HW_RESET, RST_N, ENDPOINT_RESET, UNIPRO_RESET] → TUR → START STOP UNIT → READ 比對</td></tr>
+  </table>
+
+  <h3>產生的檔案(generated/PF002_0098/)</h3>
+  <table>
+    <tr><th>#</th><th>檔案</th><th>由誰</th><th>意義</th></tr>
+    <tr><td>1</td><td><code>ir_skeleton.json</code></td><td><span class="tag t-py">①</span></td><td>解析出的 phase/step 骨架 + wiki 參考</td></tr>
+    <tr><td>2</td><td><code>enrich_prompt.txt</code></td><td><span class="tag t-py">①</span></td><td>請模型標註資料流的 prompt(含 schema)</td></tr>
+    <tr><td>3</td><td><code>annotations.json</code></td><td><span class="tag t-llm">②</span></td><td>模型標註的 inputs/outputs/edges</td></tr>
+    <tr><td>4</td><td><code>pf002-0098-ir.json</code></td><td><span class="tag t-py">③</span></td><td>最終 IR(骨架+標註)</td></tr>
+    <tr><td>5</td><td><code>pf002-0098-ir-debug.md</code></td><td><span class="tag t-py">③</span></td><td>IR 的人類可讀說明</td></tr>
+    <tr><td>6</td><td><code>1_steps.json</code></td><td><span class="tag t-py">④</span></td><td>拓撲排序後的有序 step plan</td></tr>
+    <tr><td>7</td><td><code>generation_prompt.txt</code></td><td><span class="tag t-py">④</span></td><td>生成 prompt(含 template/grounding/provenance 規則)</td></tr>
+    <tr><td>8</td><td><code>PF002_0098_boot_stress.py</code></td><td><span class="tag t-llm">⑤</span></td><td>生成的 Pattern</td></tr>
+    <tr><td>9</td><td><code>provenance.json</code></td><td><span class="tag t-llm">⑤</span></td><td>每個 step 的 grounding 來源</td></tr>
+  </table>
+
+  <h3>Grounding 實例(每個事實來自哪)</h3>
+  <table>
+    <tr><th>操作</th><th><span class="tag t-code">code(graph)</span></th><th><span class="tag t-wiki">wiki(ingested)</span></th></tr>
+    <tr><td>啟用 bBootLunEn</td><td><code>write_attribute</code> @ attr_flag_functions.py:82<br><code>AttributeIDN.BOOT_LUN_EN</code> @ enum_define.py:149</td><td><code>val 0x01 = "Boot LU A active"</code><br>(attributes.md)</td></tr>
+    <tr><td>for_each reset</td><td><code>Dcmd5ResetType</code> @ dcmd_enum.py:51-56<br><code>init_tester_to_unit_ready</code></td><td>—</td></tr>
+    <tr><td>START STOP UNIT</td><td><code>StartStopUnit</code> @ cmds.py:266</td><td>—</td></tr>
+  </table>
+
+  <div class="note">
+    <b>關鍵發現(grounding 抓到的真實問題):</b> TC 寫的 <code>"RST_N"</code> 在實際 enum 是 <code>RESET_N</code>。
+    走圖譜才對得上正確的 enum 成員——這正是「即時查真實 code」勝過「憑記憶/猜」的價值。
+  </div>
+
+  <h3>生成的 Pattern(節錄,遵循 pattern_template.py)</h3>
+  <pre><code>import package_root  # ← 第一行(路徑 bootstrap,repo 慣例)
+"""PF002_0098 — Boot Stress Test."""
+import Script
+from Script import api
+import Script.api.cmd_seq as ExecuteCMD
+from pattern.pattern_template import UFSTC
+
+class PF002_0098_BootStress(UFSTC):
+    def step4(self):  # 啟用 Boot LU
+        # src[code]: api.write_attribute -> api/ufs_api/attr_flag_functions.py:82
+        # src[wiki]: val 0x01 = "Boot LU A active" -> wiki/entities/attributes.md
+        api.write_attribute(idn=api.AttributeIDN.BOOT_LUN_EN, val=0x01)
+
+    def step8(self):  # loop_stress ×100
+        for _ in range(100):
+            for reset_type in RESET_TYPES:   # HW_RESET / RESET_N / ENDPOINT / UNIPRO
+                api.init_tester_to_unit_ready(resetmode=api.Dcmd5ResetType(reset_type),
+                                              powerdown=False)
+            ...</code></pre>
+
+  <!-- ============ DEBUG ============ -->
+  <h2>怎麼 Debug</h2>
+  <p>每次生成都留下可追溯的檔案。出問題時<b>倒著查</b>:</p>
+  <div class="pipe">
+    <div class="stage" style="background:var(--risk-bg)"><b>pattern 接錯 API</b></div>
+    <div class="arrow">→</div>
+    <div class="stage"><b>provenance.json</b>看該 step 的來源(code/wiki)</div>
+    <div class="arrow">→</div>
+    <div class="stage"><b>-ir-debug.md</b>IR 意圖/loop 對嗎</div>
+    <div class="arrow">→</div>
+    <div class="stage"><b>1_steps.json</b>step 順序/依賴</div>
+    <div class="arrow">→</div>
+    <div class="stage"><b>generation_prompt.txt</b>模型實際看到什麼</div>
+  </div>
+
+  <table>
+    <tr><th>想知道</th><th>看哪個檔</th></tr>
+    <tr><td>某個 grounded 事實來自哪(code 還是 wiki、確切位置)</td><td><code>provenance.json</code> + 程式內 <code># src[...]</code> 標記</td></tr>
+    <tr><td>哪些 step 是「沒 ground、模型硬掰」的高風險</td><td>搜 <code># TODO human-confirm</code></td></tr>
+    <tr><td>資料流 / loop / fail_condition 判斷</td><td><code>&lt;id&gt;-ir-debug.md</code></td></tr>
+    <tr><td>wiki 是「查了沒有」還是「根本沒查」</td><td><code>provenance.json</code> 的 <code>"none relevant found"</code> vs 缺欄位</td></tr>
+  </table>
+
+  <h3>兩個被 debug 抓到的真實 bug</h3>
+  <div class="grid2">
+    <div class="card" style="border-left:4px solid var(--risk)">
+      <b>① 命名前綴假設</b>
+      <p style="font-size:14px;margin:6px 0">搜尋 START STOP UNIT 時假設類別叫 <code>CmdSeq*</code>,
+      但它其實叫 <code>StartStopUnit</code>(無前綴)→ 被 grep 過濾掉,留了 TODO。</p>
+      <p style="font-size:14px;margin:6px 0"><span class="ok">修正:</span>放寬搜尋(領域關鍵字 + 同時搜 pattern/ 真實用例),
+      並寫進規則「不要假設命名前綴」。</p>
+    </div>
+    <div class="card" style="border-left:4px solid var(--risk)">
+      <b>② Parser 靜默丟棄 Phase</b>
+      <p style="font-size:14px;margin:6px 0">PF003 的 <code>## Phase F</code> 被丟掉——parser 的 regex
+      只配對數字 phase(<code>Phase \d+</code>),字母 phase 整個消失卻不報錯。</p>
+      <p style="font-size:14px;margin:6px 0"><span class="ok">修正:</span>regex 改 <code>[0-9A-Za-z]+</code>。
+      教訓:<b>靜默丟棄最危險</b>。</p>
+    </div>
+  </div>
+
+  <div class="note">
+    <b>Debug 心法:</b> <code>validate</code> 通過 ≠ 功能完整。一定要搭配看 <code>provenance.json</code>
+    與 <code># TODO human-confirm</code>,才知道哪些是真正 grounded、哪些是待人工確認的洞。
+  </div>
+
+  <!-- ============ FOOTER ============ -->
+  <h2>給其他 agent / 使用者</h2>
+  <ul class="tight">
+    <li><b>入口只需 <code>README.md</code></b>;每步再讀對應的 self-describing prompt 檔(含精確 schema)。</li>
+    <li>runtime 只需 <b>Python 3.10+ + 這個 repo + 自己的 LLM</b>。無 pip 安裝、無 skill/plugin(除非要重建 graph / 重新 ingest wiki)。</li>
+    <li>選讀:<code>docs/AGENT_WORKFLOW.md</code>(輸出檔對照表)、本報告(架構與範例)。</li>
+  </ul>
+
+  <p class="kbd" style="margin-top:30px">UFS Pattern Generator · 架構報告 · 範例 PF002_0098</p>
+
+</div>
+</body>
+</html>

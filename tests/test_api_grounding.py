@@ -1,0 +1,116 @@
+"""Tests for pattern_generator.api_grounding: build_script_index + check_api_calls.
+
+Uses a tiny synthetic Script/ tree (no dependency on the real GitNexusMCP index)."""
+from pathlib import Path
+
+from pattern_generator.api_grounding import (
+    build_script_index, check_api_calls, format_issues,
+)
+
+
+def _mini_script(root: Path) -> Path:
+    """Build a minimal Script/ library exercising `import *` chains + aliases."""
+    api = root / "api"
+    (api / "ufs_api").mkdir(parents=True)
+    (api / "cmd_seq").mkdir(parents=True)
+    (root / "lib").mkdir(parents=True)
+
+    (api / "__init__.py").write_text(
+        "from .ufs_api import *\nfrom .cmd_seq import *\n", encoding="utf-8")
+    (api / "ufs_api" / "__init__.py").write_text(
+        "from .rw import *\n", encoding="utf-8")
+    (api / "ufs_api" / "rw.py").write_text(
+        "def sequential_write(lun, start_lba, total_size, chunk_size, fua):\n"
+        "    pass\n"
+        "def random_read(cmd_count, min_lun, max_lun, need_compare, write_record):\n"
+        "    pass\n"
+        "def get_config_descriptors(print=False):\n"
+        "    return []\n"
+        "def flexible(a, **kwargs):\n"
+        "    pass\n",
+        encoding="utf-8")
+    (api / "cmd_seq" / "__init__.py").write_text(
+        "from .cmds import *\nfrom .executor import send\n", encoding="utf-8")
+    (api / "cmd_seq" / "cmds.py").write_text(
+        "class ReadCapacity10:\n    pass\n"
+        "class CmdSeqTestUnitReady:\n"
+        "    def __init__(self):\n        pass\n",
+        encoding="utf-8")
+    (api / "cmd_seq" / "executor.py").write_text(
+        "def send(clear_on_success=True, timeout=None):\n    pass\n", encoding="utf-8")
+    (root / "lib" / "sdk_lib.py").write_text(
+        "def delay(seconds):\n    pass\n", encoding="utf-8")
+    return root
+
+
+class TestBuildIndex:
+    def test_resolves_aliases_and_symbols(self, tmp_path):
+        idx = build_script_index(_mini_script(tmp_path / "Script"))
+        assert set(idx) == {"api", "ExecuteCMD", "lib"}
+        assert "random_read" in idx["api"].symbols
+        assert "sequential_write" in idx["api"].symbols
+        assert "send" in idx["ExecuteCMD"].symbols
+        assert "ReadCapacity10" in idx["ExecuteCMD"].symbols
+        assert "delay" in idx["lib"].symbols
+
+    def test_signature_params_captured(self, tmp_path):
+        idx = build_script_index(_mini_script(tmp_path / "Script"))
+        rr = idx["api"].symbols["random_read"]
+        assert rr.params == {"cmd_count", "min_lun", "max_lun", "need_compare", "write_record"}
+        assert not rr.has_kwargs
+        assert rr.max_positional == 5
+
+    def test_missing_root_returns_none(self, tmp_path):
+        assert build_script_index(tmp_path / "nope") is None
+
+
+class TestCheckApiCalls:
+    def _idx(self, tmp_path):
+        return build_script_index(_mini_script(tmp_path / "Script"))
+
+    def test_sibling_param_conflation_flagged(self, tmp_path):
+        # random_read called with sequential_write's parameters
+        src = ("def f(self):\n"
+               "    api.random_read(lun=1, start_lba=0, total_size=4096, "
+               "chunk_size=512, fua=0)\n")
+        issues = check_api_calls(src, self._idx(tmp_path))
+        bad = {i["detail"] for i in issues if i["kind"] == "unknown_kwarg"}
+        assert any("'lun'" in d for d in bad)
+        assert any("'start_lba'" in d for d in bad)
+        assert any("'chunk_size'" in d for d in bad)
+
+    def test_unknown_symbol_with_suggestion(self, tmp_path):
+        src = "def f(self):\n    api.get_config_descriptor()\n"
+        issues = check_api_calls(src, self._idx(tmp_path))
+        assert len(issues) == 1
+        assert issues[0]["kind"] == "unknown_symbol"
+        assert issues[0]["suggestion"] == "get_config_descriptors"
+
+    def test_correct_call_passes(self, tmp_path):
+        src = ("def f(self):\n"
+               "    api.sequential_write(lun=1, start_lba=0, total_size=4096, "
+               "chunk_size=512, fua=0)\n")
+        assert check_api_calls(src, self._idx(tmp_path)) == []
+
+    def test_too_many_positional_flagged(self, tmp_path):
+        src = "def f(self):\n    lib.delay(1, 2, 3)\n"   # delay takes 1
+        issues = check_api_calls(src, self._idx(tmp_path))
+        assert any(i["kind"] == "too_many_positional" for i in issues)
+
+    def test_kwargs_func_accepts_any_kwarg(self, tmp_path):
+        src = "def f(self):\n    api.flexible(a=1, anything=2, more=3)\n"
+        assert check_api_calls(src, self._idx(tmp_path)) == []
+
+    def test_class_without_init_accepts_any(self, tmp_path):
+        src = "def f(self):\n    ExecuteCMD.ReadCapacity10(x=1)\n"
+        assert check_api_calls(src, self._idx(tmp_path)) == []
+
+    def test_instance_method_calls_ignored(self, tmp_path):
+        # cmd.enqueue() is not a namespace call — must not be flagged
+        src = "def f(self):\n    cmd.enqueue()\n    resp.data\n"
+        assert check_api_calls(src, self._idx(tmp_path)) == []
+
+    def test_format_issues_renders_lines(self, tmp_path):
+        src = "def f(self):\n    api.get_config_descriptor()\n"
+        lines = format_issues(check_api_calls(src, self._idx(tmp_path)))
+        assert lines and "did you mean 'get_config_descriptors'" in lines[0]

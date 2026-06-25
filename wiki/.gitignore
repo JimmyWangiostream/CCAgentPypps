@@ -1,0 +1,15 @@
+﻿# Wiki generated files
+conflicts.md
+.conflicts-cache/
+
+# Index cache
+index.json.cache
+
+# Layered retrieval index (rebuild with: python wiki_index.py build)
+.index/
+
+# System files
+.DS_Store
+Thumbs.db
+__pycache__/
+*.pyc

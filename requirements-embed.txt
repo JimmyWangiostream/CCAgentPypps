@@ -1,0 +1,10 @@
+# Optional dependencies for the DENSE (semantic) wiki retrieval path.
+# The core retriever (BM25 + reference graph) needs none of these and works
+# offline; install these only to enable the dense embedder + RRF fusion.
+#
+#   pip install -r requirements-embed.txt
+#
+# Default model: BAAI/bge-small-zh-v1.5 (~100MB, multilingual EN+ZH).
+# Alternative:   intfloat/multilingual-e5-small
+sentence-transformers>=2.2.0
+numpy>=1.24.0
