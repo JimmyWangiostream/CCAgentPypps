@@ -44,13 +44,35 @@ read the emitted prompt file, write the named output. The prompt files are:
 `<id>_repair_prompt.txt` / `<id>_review_prompt.txt` (the `finish` gate loop),
 `wholefile_prompt.txt` (the Stage-3 whole-file alternative).
 
+### Quick start — onboarding ANY agent (incl. non-Claude-Code)
+
+Prerequisites for the agent:
+- Read **AGENTS.md AND CLAUDE.md** (CLAUDE.md has the command syntax + Step rules +
+  the `unit_NN_*_methods.py` section format).
+- **Python** (core pipeline is pure stdlib) + this repo checked out. Can run shell
+  commands and read/write files.
+- **Grounding:** the default path tells the agent to call the **gitnexus MCP** tools.
+  An agent WITHOUT gitnexus MCP must use **`prepare --grounding direct`** (pure-Python
+  retrieval; no MCP) and confirm signatures by reading `GitNexusMCP/Script` source.
+
+Kickoff message to paste to another agent (no-MCP / portable form):
+```
+Read AGENTS.md and CLAUDE.md to understand this TC→Pattern pipeline. Then generate a
+pattern from TC/<file>.md following the Orchestration steps below. Use
+`prepare --grounding direct` (you have no gitnexus MCP); ground each API call on the
+injected candidates and by reading GitNexusMCP/Script source. Run `finish` repeatedly,
+fixing every finding in its repair prompt, until GATE PASS. Fail points accumulate in
+gate_logs/<id>.gate_log.md; the pitfall checklist is `python generate_pattern.py rules`.
+```
+(If the agent HAS gitnexus MCP, drop `--grounding direct` to use the default path.)
+
 ### Orchestration prompt (copy-paste for another agent)
 ```
 Generate a UFS test pattern for TC/<file>.md. Run, in order:
 1. python generate_pattern.py prepare-ir TC/<file>.md
 2. read <run>/enrich_prompt.txt  -> write <run>/annotations.json
 3. python generate_pattern.py finalize-ir <run>/ir_skeleton.json <run>/annotations.json
-4. python generate_pattern.py prepare <run>/<id>-ir.json          # gitnexus grounding (default)
+4. python generate_pattern.py prepare <run>/<id>-ir.json [--grounding direct]   # direct = no MCP
 5. for k=1..N: python generate_pattern.py prepare-unit <run> k
                 read <run>/unit_kk_*_prompt.txt -> write unit_kk_*_methods.py
                 (loop-wrapper units report "skip" — do NOT hand-write them)
