@@ -51,6 +51,10 @@ def main():
     p3.add_argument("--script-root", default=None,
                     help="Root of the Script/ library for the API-reality check "
                          "(default: PGConfig.script_root)")
+    p3.add_argument("--gate-log-dir", default=None,
+                    help="folder for the append-only gate history (default: PGConfig.gate_log_dir)")
+
+    sub.add_parser("rules", help="list the prescriptive rule pack (the pitfall checklist)")
 
     pr = sub.add_parser("review",
                         help="build the review->repair prompt (checkpoints + rule pack + code)")
@@ -71,6 +75,9 @@ def main():
     pg.add_argument("ir_file")
     pg.add_argument("--script-root", default=None)
     pg.add_argument("--max-rounds", type=int, default=3)
+    pg.add_argument("--gate-log-dir", default=None,
+                    help="folder for all gate by-products + append-only history "
+                         "(default: PGConfig.gate_log_dir)")
 
     args = ap.parse_args()
 
@@ -125,11 +132,21 @@ def main():
         print(f"Assembled: {out_path} ({len(src.splitlines())} lines)")
         print(f"By-products: {run_dir}")
     elif args.cmd == "validate":
+        from pattern_generator.gate_log import append_record
+        base = PGConfig()
         ir = json.loads(Path(args.ir_file).read_text(encoding="utf-8"))
-        src = Path(args.py_file).read_text(encoding="utf-8")
-        script_root = args.script_root or PGConfig().script_root
+        py_file = Path(args.py_file)
+        src = py_file.read_text(encoding="utf-8")
+        script_root = args.script_root or base.script_root
         report = validate(src, ir, script_root=script_root)
         print(json.dumps(report, ensure_ascii=False, indent=2))
+        log_dir = Path(args.gate_log_dir) if args.gate_log_dir else base.gate_log_dir
+        lp = append_record(log_dir, ir["pattern_id"], py_file.name, "validate", None, report)
+        print(f"Gate log: {lp}")
+    elif args.cmd == "rules":
+        from pattern_generator.rules import RULES, format_rules
+        print(f"Rule pack — {len(RULES)} prescriptive rules (the pitfall checklist):\n")
+        print(format_rules(RULES))
     elif args.cmd == "prepare-wholefile":
         from pattern_generator.wholefile import build_wholefile_prompt
         from pattern_generator.run_logger import RunDir
@@ -162,14 +179,20 @@ def main():
         import sys
         from pattern_generator.driver import run_gate, build_repair_prompt
         from pattern_generator.review import build_review_prompt
+        from pattern_generator.gate_log import append_record
+        base = PGConfig()
         ir = json.loads(Path(args.ir_file).read_text(encoding="utf-8"))
+        pattern_id = ir["pattern_id"]
         py_file = Path(args.py_file)
         src = py_file.read_text(encoding="utf-8")
-        script_root = args.script_root or PGConfig().script_root
+        script_root = args.script_root or base.script_root
         gate = run_gate(src, ir, script_root=script_root)
         print(json.dumps(gate["report"], ensure_ascii=False, indent=2))
 
-        state_file = py_file.with_name(py_file.stem + "_gate_state.json")
+        # All by-products + history live in ONE folder, named by pattern_id.
+        log_dir = Path(args.gate_log_dir) if args.gate_log_dir else base.gate_log_dir
+        log_dir.mkdir(parents=True, exist_ok=True)
+        state_file = log_dir / f"{pattern_id}_gate_state.json"
         rnd = 1
         if state_file.exists():
             try:
@@ -177,28 +200,32 @@ def main():
             except (OSError, ValueError):
                 rnd = 1
 
+        lp = append_record(log_dir, pattern_id, py_file.name, "finish", rnd, gate["report"])
+
         if gate["failures"]:
             if rnd > args.max_rounds:
                 print(f"GATE FAIL: max rounds ({args.max_rounds}) reached — needs a human.")
+                print(f"Gate log: {lp}")
                 state_file.unlink(missing_ok=True)
                 sys.exit(1)
             prompt = build_repair_prompt(src, ir, gate["report"])
-            out_path = py_file.with_name(py_file.stem + "_repair_prompt.txt")
+            out_path = log_dir / f"{pattern_id}_repair_prompt.txt"
             out_path.write_text(prompt, encoding="utf-8")
             state_file.write_text(json.dumps({"round": rnd}), encoding="utf-8")
             print(f"GATE FAIL (round {rnd}/{args.max_rounds}). Repair prompt: {out_path}")
-            print(f"Next (LLM): read it, rewrite {py_file.name} fixing every finding, "
-                  f"then re-run: python generate_pattern.py finish {py_file.name} {Path(args.ir_file).name}")
+            print(f"Gate log: {lp}")
+            print(f"Next (LLM): read the repair prompt, rewrite {py_file.name} fixing every "
+                  f"finding, then re-run: python generate_pattern.py finish {py_file.name} {Path(args.ir_file).name}")
             sys.exit(1)
         else:
             state_file.unlink(missing_ok=True)  # converged; reset the loop counter
             prompt = build_review_prompt(src, ir)
-            out_path = py_file.with_name(py_file.stem + "_review_prompt.txt")
+            out_path = log_dir / f"{pattern_id}_review_prompt.txt"
             out_path.write_text(prompt, encoding="utf-8")
             print("GATE PASS (structural). A structural pass is NOT rule-clean — do one "
                   "rule-level review pass for assert-discipline / protocol correctness.")
-            print(f"Review prompt: {out_path}  (read → rewrite → re-run finish to confirm; "
-                  f"or accept as-is if the review finds nothing)")
+            print(f"Review prompt: {out_path}  (read → rewrite → re-run finish to confirm)")
+            print(f"Gate log: {lp}")
 
 
 if __name__ == "__main__":

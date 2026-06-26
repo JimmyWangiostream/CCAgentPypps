@@ -22,10 +22,15 @@ class PGConfig:
     #   "direct"             — inject top-N candidate symbols retrieved straight from
     #                          script_root (code_retrieval); no MCP server involved.
     grounding_mode: str = "gitnexus"
+    # All gate by-products + accumulating history land here (one folder, per-pattern
+    # files): <pattern_id>.gate_log.md (append-only history), plus the transient
+    # <pattern_id>_repair_prompt.txt / _review_prompt.txt / _gate_state.json.
+    gate_log_dir: Path = field(default_factory=lambda: REPO_ROOT / "gate_logs")
 
     def __post_init__(self):
         self.repo_root = Path(self.repo_root)
         self.wiki_path = Path(self.wiki_path)
         self.generated_dir = Path(self.generated_dir)
         self.script_root = Path(self.script_root)
+        self.gate_log_dir = Path(self.gate_log_dir)
         self.generated_dir.mkdir(parents=True, exist_ok=True)
