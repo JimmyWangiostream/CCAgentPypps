@@ -14,33 +14,34 @@ model (no API key). Every artifact for one pattern lands in `generated/<PATTERN_
    → writes `<id>-ir.json` + `<id>-ir-debug.md` in the folder.
 
 4. `python generate_pattern.py prepare generated/<ID>/<id>-ir.json`
-   → writes `1_steps.json` (topological, phase-aware step plan) + `generation_prompt.txt`.
+   → writes `scaffold.py` (class skeleton + markers), `1_units.json` (the ordered
+   generation **unit** plan — one stepN per step, a loop phase → wrapper + per-substep
+   helpers), `_run_meta.json`, and only the FIRST unit's `unit_01_*_prompt.txt`.
 
-5. **LLM step B — generate the pattern.** Read `generation_prompt.txt` and write
-   `generated/<ID>/<pattern>.py`, following `pattern_template_wizard/pattern_template.py`
-   (subclass `UFSTC`; steps become `step1..stepN`; data flow via `self.*`; loop
-   phase = a step with an internal `for` loop). Ground each step against BOTH
-   sources and record provenance:
-   - **code** (gitnexus MCP): call the `query` tool (top-N candidate symbols) +
-     `context` (signatures) over the indexed `Script/` codebase. Domain-keyword
-     search; no naming-prefix assumptions; prefer `project_api/` for customer
-     behaviour, `api/` for Spec APIs, `pattern/` for the idiom. Record the top-5
-     used in `=== CODE REFS ===`.
-   - **wiki** (layered retriever): use the RRF top-5 essence injected into the unit
-     prompt; conflict overrides WIN. Two independent rules: CustomerReq > Spec and
-     UserPrompt > ModelDefault. Record pages used in `=== WIKI REFS ===`.
-   - Tag each grounded element inline `# src[code]: <gitnexus path>:<sym>` / `# src[wiki]: file`.
-   - Write `generated/<ID>/provenance.json` with both sources per step; use the
-     string `"none relevant found"` where a source had nothing (so "checked but
-     empty" is distinct from "not checked"). Emit `# TODO human-confirm` for any
-     ungrounded call.
+5. **LLM step B — generate, one UNIT at a time.** For each unit k:
+   `python generate_pattern.py prepare-unit generated/<ID>/ k` builds
+   `unit_kk_*_prompt.txt` (embeds upstream units for continuity). Read it and write
+   `unit_kk_*_methods.py` (sections `=== WIKI REFS / CODE REFS / REVIEW FLAGS /
+   EXTRA IMPORTS / METHODS ===`, exactly one `stepN`/helper). Loop-wrapper units are
+   deterministic — `prepare-unit` reports "skip"; do NOT hand-write them. Ground each
+   call against code (gitnexus `query`/`context`, or `--grounding direct`) + the
+   injected wiki essence; tag inline `# src[code]:` / `# src[wiki]:`.
 
-6. `python generate_pattern.py validate generated/<ID>/<pattern>.py generated/<ID>/<id>-ir.json`
-   → prints syntax/structure/imports report. Fix and re-validate as needed.
+6. `python generate_pattern.py assemble generated/<ID>/ <PatternName>`
+   → injects the `unit_*_methods.py` into the scaffold → `<PatternName>.py` (+ `retrieval_debug.md`).
 
-`generated/<ID>/` then contains every artifact for one pattern: ir_skeleton,
-annotations, IR (+debug), step plan, prompts, the .py, and provenance — fully
-debuggable, with each grounded fact traceable to code or wiki.
+7. `python generate_pattern.py finish generated/<ID>/<PatternName>.py generated/<ID>/<id>-ir.json`
+   → the **gate loop**: validates (`syntax`/`structure`/`dataflow`/`api_grounding`).
+   On **FAIL** it writes `<id>_repair_prompt.txt` (the validator's concrete findings +
+   the review prompt) — read it, rewrite the WHOLE `.py`, re-run `finish` (bounded by
+   `--max-rounds`). On **PASS** it writes `<id>_review_prompt.txt` for one rule-level
+   pass (a structural pass is NOT rule-clean). All gate by-products + the append-only
+   history live in `gate_logs/` (`<id>.gate_log.md`).
+
+`generated/<ID>/` holds the pattern artifacts (ir_skeleton, annotations, IR (+debug),
+`1_units.json`, scaffold, per-unit prompts/methods, the `.py`); `gate_logs/<id>.gate_log.md`
+holds the run-by-run fail-point history. `python generate_pattern.py rules` lists the
+pitfall checklist.
 
 ## Output files — order, producer, meaning
 
@@ -54,15 +55,17 @@ deterministic Python (CLI) and LLM (current model):
 | 3 | `annotations.json` | **LLM step A** | LLM | Data-flow annotation the model produces from (2). |
 | 4 | `<id>-ir.json` | `finalize-ir` | Python | **Final IR** = skeleton (1) + annotations (3). The input to generation. |
 | 5 | `<id>-ir-debug.md` | `finalize-ir` | Python | Human-readable IR report (phase table, loop/fail_condition, data flow). |
-| 6 | `1_steps.json` | `prepare` | Python | IR flattened in topological order into an ordered step list + phase context. |
-| 7 | `generation_prompt.txt` | `prepare` | Python | Generation prompt: rules (template, both-sources, provenance) + step plan + IR. |
-| 8 | `<PatternName>.py` | **LLM step B** | LLM | The generated pattern, grounded by on-demand code/wiki search. |
-| 9 | `provenance.json` | **LLM step B** | LLM | Per-step source record (code / wiki / "none relevant found"). Written with (8). |
+| 6 | `scaffold.py` + `1_units.json` | `prepare` | Python | Class skeleton (markers) + the ordered generation **unit** plan (topological; loop → wrapper + per-substep helpers). |
+| 7 | `unit_NN_*_prompt.txt` | `prepare` / `prepare-unit` | Python | Per-unit generation prompt (wiki essence + `self.*` contract + upstream continuity). |
+| 8 | `unit_NN_*_methods.py` | **LLM step B** | LLM | Per-unit output: one `stepN`/helper + `=== CODE/WIKI REFS ===` provenance. |
+| 9 | `<PatternName>.py` + `retrieval_debug.md` | `assemble` | Python | The merged pattern + per-unit grounding/flag report. |
+| 10 | `gate_logs/<id>.gate_log.md` (+ `_repair/_review_prompt.txt`) | `finish`/`validate` | mixed | Append-only fail-point history + the gate loop's prompts. |
 
-Three groups: **IR stage** (1-5, "what the pattern must do") · **generation
-stage** (6-8, "how to build it from real code") · **traceability** (5 debug + 9
-provenance, "why these decisions, where grounding came from").
+Three groups: **IR stage** (1-5, "what the pattern must do") · **generation stage**
+(6-9, "how to build it from real code, unit by unit") · **gate/traceability** (5 debug,
+9 retrieval_debug, 10 gate log — "what failed, where grounding came from").
 
-Debug entry points: wrong API in a step → `provenance.json` + inline `# src[...]`
-in the .py; IR data-flow/loop wrong → `<id>-ir-debug.md`; step order/phase deps →
-`1_steps.json`; what the model actually saw → `generation_prompt.txt`.
+Debug entry points: wrong API in a step → inline `# src[...]` in the .py +
+`retrieval_debug.md`; IR data-flow/loop wrong → `<id>-ir-debug.md`; unit order/phase
+deps → `1_units.json`; what the model saw → `unit_NN_*_prompt.txt`; why a gate failed →
+`gate_logs/<id>.gate_log.md`.

@@ -71,6 +71,34 @@ python generate_pattern.py assemble <GEN>/<ID>/ <PatternName>
 # Pipeline step 6: validate generated pattern against IR (+ API-reality check vs Script)
 python generate_pattern.py validate <GEN>/<PatternName>.py <GEN>/<ID>/<id>-ir.json
 #   optional: --script-root <path>  (defaults to PGConfig.script_root = GitNexusMCP/Script)
+#   Report keys: syntax, structure, dataflow, api_grounding. structure catches methods
+#   defined OUTSIDE the pattern class (parses but process() runs nothing = false PASS) +
+#   def-after-__main__ + missing planned methods; dataflow flags a consumer that overwrites
+#   a consumed var without reading it; api_grounding adds missing_required_arg.
+#   Appends findings to gate_logs/<id>.gate_log.md (history). --gate-log-dir to override.
+
+# Pipeline step 7 (gate loop): validate -> on FAIL emit a repair prompt (validator findings
+# + review), on PASS emit the review prompt; loops to convergence.
+python generate_pattern.py finish <GEN>/<PatternName>.py <GEN>/<ID>/<id>-ir.json
+#   --max-rounds N (default 3). All by-products + the append-only history land in ONE folder:
+#   gate_logs/  ->  <id>.gate_log.md, <id>_repair_prompt.txt, <id>_review_prompt.txt,
+#   <id>_gate_state.json. LLM: read the repair/review prompt, rewrite the WHOLE .py, re-run.
+
+# Review prompt only (Stage 2): IR checkpoints (each expected/fail_condition must be asserted)
+# + rule pack + the code -> LLM emits a corrected full file.
+python generate_pattern.py review <GEN>/<PatternName>.py <GEN>/<ID>/<id>-ir.json
+
+# Pitfall checklist (the prescriptive rule pack used by review/finish):
+python generate_pattern.py rules
+
+# Alt grounding (no MCP server): inject candidate symbols straight from Script.
+python generate_pattern.py prepare <GEN>/<ID>/<id>-ir.json --grounding direct
+#   default is --grounding gitnexus (unchanged). direct writes to generate_without_gitnexus/.
+
+# Stage-3 alternative (whole-file authoring instead of per-unit fragments):
+python generate_pattern.py prepare-wholefile <GEN>/<ID>/<id>-ir.json
+#   -> one wholefile_prompt.txt (idiom anchors + rule pack + data-flow contract); LLM writes
+#   the COMPLETE .py in one coherent pass, then run `finish`.
 
 # Pipeline step 6b: mypy the generated pattern. Run from GitNexusMCP/ — there Script/ is
 # the top-level package (so `from Script import api` resolves) and the ini lives in that
@@ -150,10 +178,16 @@ Layered retrieval over the ingested wiki (`wiki/concepts/` + `wiki/entities/`):
 - `stepwise.py`: Orders phases topologically and flattens to generation **units** (`generation_units`); builds `scaffold.py` and per-unit prompts (`build_one_unit_prompt`) — injects wiki RRF top-5 essence + `self.*` contracts + upstream continuity, and instructs the agent to call gitnexus for code refs
 - `prepare.py`: `prepare_pattern` writes `scaffold.py` + `1_units.json` + first unit prompt; `prepare_unit` lazily builds unit N's prompt (wiki essence injected, upstream `unit_*_methods.py` embedded)
 - `assemble.py`: Merges scaffold + `unit_NN_*_methods.py` into the final `.py` (+ `retrieval_debug.md`)
-- `validator.py`: Validates generated `.py` for syntax + step structure against IR
+- `validator.py`: Validates `.py` against IR — `syntax` + `structure` (every stepN/helper is a class member; no method outside the class / after `if __name__`; planned methods present; loop_count) + `dataflow` (a consumer must not overwrite a `consumes` var without reading it) + `api_grounding`
+- `api_grounding.py`: AST reality check of `api.`/`ExecuteCMD.`/`lib.` calls vs Script — unknown symbol / unknown kwarg / too-many-positional / **missing_required_arg**
+- `rules.py`: prescriptive rule pack (do/don't with WRONG/CORRECT) — Query-vs-Descriptor, volatile-flag assert, exception naming, lba reuse, reset helper; `select_rules` (keyword) + `format_rules`
+- `review.py`: `build_review_prompt` — IR checkpoints (each `expected`/`fail_condition` must be implemented AND asserted) + selected rules + whole file → LLM emits a corrected file
+- `wholefile.py`: `build_wholefile_prompt` — Stage-3 coherent authoring (unit plan + `self.*` contract + `idioms.py` worked-snippet anchors + rule pack)
+- `driver.py` + `gate_log.py`: the `finish` gate loop — validate→repair-prompt→re-validate; every run's findings appended to `gate_logs/<id>.gate_log.md` (all by-products in that one folder)
 
 ### Grounding Sources
-- **Code** — the **gitnexus** MCP server (indexes `Script/`: `api/` Spec APIs, `pattern/` real patterns, `project_api/` customer APIs, `lib/` shared libs). The agent calls its `query`/`context` tools at generation time to get real symbols. (Replaces the deleted understand-anything code graph.)
+- **Code (default)** — the **gitnexus** MCP server (indexes `Script/`). The agent calls its `query`/`context` tools at generation time to get real symbols.
+- **Code (alt, `--grounding direct`)** — `code_retrieval/` (AST index over `Script` + reused BM25) injects top-N candidate symbols / worked idioms; no MCP server. The `validator` api-grounding check always reads `Script` directly regardless of mode.
 - **LLM-Wiki** (`wiki/`): layered retriever (above). The pipeline injects the RRF top-5 essence into each unit prompt; conflict overrides win.
 
 ### Pattern Base (`pattern_template_wizard/pattern_template.py`)

@@ -32,7 +32,53 @@ Claude Code reads `CLAUDE.md`; this file mirrors the key environment facts for o
 ## Pipeline (full detail in CLAUDE.md)
 
 `TC .md → prepare-ir → (Step A: annotations.json) → finalize-ir → prepare →
-prepare-unit ×N → (Step B: unit_NN_*_methods.py) → assemble → validate`.
-Steps prepare-ir / finalize-ir / prepare / prepare-unit / assemble / validate are
-deterministic Python CLI commands; Step A and Step B are performed by the agent.
-No external LLM API keys are used. See `CLAUDE.md` for command syntax and Step rules.
+prepare-unit ×N → (Step B: unit_NN_*_methods.py) → assemble → finish (gate loop)`.
+Deterministic Python CLI: prepare-ir / finalize-ir / prepare / prepare-unit /
+assemble / validate / review / finish. LLM steps (Step A, Step B, repairs) are
+performed by the agent. No external LLM API keys are used.
+
+**Key design for agents: every LLM step's instructions are in a self-contained
+`.txt` prompt the CLI writes.** You don't need a meta-prompt — run the command,
+read the emitted prompt file, write the named output. The prompt files are:
+`enrich_prompt.txt` (Step A), `unit_NN_*_prompt.txt` (Step B per unit),
+`<id>_repair_prompt.txt` / `<id>_review_prompt.txt` (the `finish` gate loop),
+`wholefile_prompt.txt` (the Stage-3 whole-file alternative).
+
+### Orchestration prompt (copy-paste for another agent)
+```
+Generate a UFS test pattern for TC/<file>.md. Run, in order:
+1. python generate_pattern.py prepare-ir TC/<file>.md
+2. read <run>/enrich_prompt.txt  -> write <run>/annotations.json
+3. python generate_pattern.py finalize-ir <run>/ir_skeleton.json <run>/annotations.json
+4. python generate_pattern.py prepare <run>/<id>-ir.json          # gitnexus grounding (default)
+5. for k=1..N: python generate_pattern.py prepare-unit <run> k
+                read <run>/unit_kk_*_prompt.txt -> write unit_kk_*_methods.py
+                (loop-wrapper units report "skip" — do NOT hand-write them)
+6. python generate_pattern.py assemble <run> <PatternName>
+7. python generate_pattern.py finish <gen>/<PatternName>.py <run>/<id>-ir.json
+      GATE FAIL -> read the printed <id>_repair_prompt.txt, rewrite the WHOLE .py
+                   fixing every finding, re-run finish (until GATE PASS or max-rounds).
+      GATE PASS -> read <id>_review_prompt.txt, do one rule-level review pass.
+```
+
+### New commands (since the original pipeline)
+- `prepare --grounding {gitnexus,direct}` — `direct` injects candidate symbols from
+  `Script` via `code_retrieval` (no MCP server); default `gitnexus` is unchanged.
+- `validate` — now also reports **structure** (every stepN/helper is a class member;
+  no method outside the class / after `if __name__`) and **dataflow** (a consumer must
+  not re-derive a var it should inherit), plus api `missing_required_arg`.
+- `finish` — gate driver: validate; on FAIL emit a repair prompt (validator findings +
+  review) and loop (`--max-rounds`, default 3); on PASS emit the review prompt.
+- `review` — build the review→repair prompt (IR checkpoints + rule pack + code).
+- `rules` — print the prescriptive rule pack (the pitfall checklist).
+- `prepare-wholefile` — Stage-3 alternative: one whole-file authoring prompt
+  (idiom anchors + rule pack + data-flow contract) instead of per-unit fragments.
+
+### Where to see fail points / pitfalls
+- **Fail points (per run + history):** `gate_logs/<pattern_id>.gate_log.md` —
+  append-only, timestamped, every `validate`/`finish` run's findings. The same folder
+  holds the transient `<id>_repair_prompt.txt` / `_review_prompt.txt` / `_gate_state.json`.
+- **Pitfall checklist (the rules):** `python generate_pattern.py rules`, source in
+  `pattern_generator/rules.py`.
+
+See `CLAUDE.md` for command syntax and Step rules.
