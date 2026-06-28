@@ -19,7 +19,7 @@ from pattern_generator.stepwise import (
 )
 from wiki_retrieval.retrieve import retrieve
 from wiki_retrieval.essence import build_essence, format_top_refs
-from wiki_retrieval.defaults import load_overrides, modeldefault_block
+from wiki_retrieval.defaults import load_overrides, modeldefault_block, retrieve_modeldefault
 
 
 def _unit_prompt_filename(unit: dict) -> str:
@@ -58,13 +58,36 @@ def _unit_wiki(unit: dict, wiki_path) -> dict:
     }
 
 
-def _unit_defaults(unit: dict, wiki_path) -> str:
+def _unit_defaults(unit: dict, wiki_path):
     """Per-unit defaults block: §1-§3 overrides (always) + the single most relevant
     ModelDefault topic (retrieved). Keeps unit prompts small (~4KB vs ~30KB) while
-    the absence-triggered overrides (LUN etc.) are never missed."""
+    the absence-triggered overrides (LUN etc.) are never missed.
+
+    Returns (text, modeldefault_stem | None) so the caller can record deterministically
+    WHAT was offered to this unit (see _record_defaults)."""
+    query = _unit_query(unit)
     overrides = load_overrides(wiki_path)
-    md = modeldefault_block(_unit_query(unit), wiki_path, k=1)
-    return overrides + ("\n\n" + md if md else "")
+    hits = retrieve_modeldefault(query, wiki_path, k=1)
+    stem = hits[0][0] if hits else None
+    md = modeldefault_block(query, wiki_path, k=1)  # cached retrieve
+    return overrides + ("\n\n" + md if md else ""), stem
+
+
+def _record_defaults(run_dir, unit: dict, stem, init: bool = False) -> None:
+    """Append one deterministic 'defaults OFFERED to this unit' line to
+    <run_dir>/defaults_debug.md. (What the model actually USED is its own
+    `# src[wiki]` self-report, aggregated into retrieval_debug.md.)"""
+    path = Path(run_dir) / "defaults_debug.md"
+    if init or not path.exists():
+        path.write_text(
+            "# Defaults offered per unit — DETERMINISTIC (what was INJECTED)\n\n"
+            "> §1-§3 overrides (UserPrompt/CustomerReq) are ALWAYS injected.\n"
+            "> §4 ModelDefault base is retrieved per step (top-1 topic).\n"
+            "> What the model actually USED = its `# src[wiki]` tags (see retrieval_debug.md).\n\n",
+            encoding="utf-8")
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(f"- unit {unit['index']:02d} ({unit.get('unit_id')}): "
+                 f"overrides=always; modeldefault={stem or 'NONE'}\n")
 
 
 def _unit_code(unit: dict, script_root, k: int = 5) -> list:
@@ -168,16 +191,18 @@ def prepare_pattern(ir_path, config: PGConfig | None = None) -> dict:
         wiki = _unit_wiki(first_unit, config.wiki_path)
         code_candidates = (_unit_code(first_unit, config.script_root)
                            if config.grounding_mode == "direct" else None)
+        defaults_text, md_stem = _unit_defaults(first_unit, config.wiki_path)
         prompt = build_one_unit_prompt(
             ir, first_unit,
             wiki_essence=wiki["essence"], wiki_top=wiki["top"],
             wiki_has_match=wiki["has_match"],
             grounding_mode=config.grounding_mode,
             code_candidates=code_candidates,
-            defaults=_unit_defaults(first_unit, config.wiki_path),
+            defaults=defaults_text,
         )
         first_prompt_file = _unit_prompt_filename(first_unit)
         run.write_text(first_prompt_file, prompt)
+        _record_defaults(run.path, first_unit, md_stem, init=True)
 
     return {
         "run_dir": str(run.path),
@@ -233,6 +258,7 @@ def prepare_unit(run_dir, unit_index: int, config: PGConfig | None = None) -> di
     mode = _resolve_grounding_mode(run_dir, cfg)
     wiki = _unit_wiki(unit, cfg.wiki_path)
     code_candidates = (_unit_code(unit, cfg.script_root) if mode == "direct" else None)
+    defaults_text, md_stem = _unit_defaults(unit, cfg.wiki_path)
     prompt = build_one_unit_prompt(
         ir, unit,
         upstream_methods=methods_text,
@@ -242,10 +268,11 @@ def prepare_unit(run_dir, unit_index: int, config: PGConfig | None = None) -> di
         wiki_has_match=wiki["has_match"],
         grounding_mode=mode,
         code_candidates=code_candidates,
-        defaults=_unit_defaults(unit, cfg.wiki_path),
+        defaults=defaults_text,
     )
     fname = _unit_prompt_filename(unit)
     (run_dir / fname).write_text(prompt, encoding="utf-8")
+    _record_defaults(run_dir, unit, md_stem)
 
     return {
         "run_dir": str(run_dir),

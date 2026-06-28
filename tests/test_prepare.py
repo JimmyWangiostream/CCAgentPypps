@@ -180,6 +180,22 @@ _HAS_SCRIPT = (PGConfig().script_root / "api").is_dir()
 _skip_no_script = pytest.mark.skipif(not _HAS_SCRIPT, reason="GitNexusMCP/Script not present")
 
 
+def test_prepare_writes_defaults_debug(tmp_path):
+    """prepare records, deterministically, which defaults were OFFERED to each unit."""
+    out = prepare_pattern(_write_ir(tmp_path), _cfg(tmp_path))
+    run = Path(out["run_dir"])
+    dbg = run / "defaults_debug.md"
+    assert dbg.exists()
+    txt = dbg.read_text(encoding="utf-8")
+    assert "Defaults offered per unit" in txt
+    assert "overrides=always" in txt
+    assert "modeldefault=" in txt
+    # a downstream unit appends another line
+    (run / "unit_01_s1_methods.py").write_text(UPSTREAM_METHODS, encoding="utf-8")
+    prepare_unit(run, 2, _cfg(tmp_path))
+    assert dbg.read_text(encoding="utf-8").count("overrides=always") >= 2
+
+
 def test_prepare_persists_grounding_meta(tmp_path):
     """Both modes record _run_meta.json so prepare-unit can recover the mode."""
     out = prepare_pattern(_write_ir(tmp_path), _cfg(tmp_path))

@@ -239,4 +239,14 @@ def _write_retrieval_debug(run_dir: Path, parsed: list, api_issues: dict | None 
         header.append("_(no review flags — every unit grounded in both wiki and code)_")
         header.append("")
 
-    (run_dir / "retrieval_debug.md").write_text("\n".join(header + body), encoding="utf-8")
+    # Embed the deterministic "defaults offered per unit" record (written by prepare)
+    # so one file shows both what was OFFERED (deterministic) and what the model
+    # SELF-REPORTED using (wiki/code refs above).
+    defaults_dbg = run_dir / "defaults_debug.md"
+    tail: list = []
+    if defaults_dbg.is_file():
+        tail = ["", "---", "", "## Defaults offered (deterministic — what was injected)",
+                "", defaults_dbg.read_text(encoding="utf-8").strip()]
+
+    (run_dir / "retrieval_debug.md").write_text(
+        "\n".join(header + body + tail), encoding="utf-8")
