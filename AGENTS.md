@@ -61,8 +61,12 @@ Read AGENTS.md and CLAUDE.md to understand this TC→Pattern pipeline. Then gene
 pattern from TC/<file>.md following the Orchestration steps below. Use
 `prepare --grounding direct` (you have no gitnexus MCP); ground each API call on the
 injected candidates and by reading GitNexusMCP/Script source. Run `finish` repeatedly,
-fixing every finding in its repair prompt, until GATE PASS. Fail points accumulate in
-gate_logs/<id>.gate_log.md; the pitfall checklist is `python generate_pattern.py rules`.
+fixing every finding in its repair prompt, until GATE PASS.
+Project defaults (default.md) are auto-injected: when the TC omits a detail (e.g. which
+LUN), follow them — do NOT hardcode lun=0 (use the MaxCapacity Enabled LUN rule); tag any
+default you use as `# src[wiki]: default.md`, and see <run>/defaults_debug.md for what was
+offered. Fail points accumulate in gate_logs/<id>.gate_log.md; the pitfall checklist is
+`python generate_pattern.py rules`.
 ```
 (If the agent HAS gitnexus MCP, drop `--grounding direct` to use the default path.)
 
