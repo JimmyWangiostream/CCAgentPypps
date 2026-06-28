@@ -13,18 +13,27 @@ Code grounding is done at generation time (gitnexus MCP, or direct Script
 retrieval); the checks here are deterministic, post-hoc AST reality checks against
 the IR + the Script/ library (see pattern_generator.api_grounding)."""
 import ast
+import os
+import subprocess
+import sys
+from pathlib import Path
 
 from pattern_generator.api_grounding import (
     build_script_index, check_api_calls, format_issues,
 )
 
 
-def validate(py_source: str, ir: dict, script_root=None) -> dict:
-    """Validate syntax, IR structure, data flow, and (if script_root given) API reality.
+def validate(py_source: str, ir: dict, script_root=None,
+             py_path=None, run_mypy: bool = False) -> dict:
+    """Validate syntax, IR structure, data flow, API reality, and (opt-in) mypy.
 
     `script_root` points at the Script/ library. When omitted or not a valid
     Script root, the api_grounding check reports "skipped" rather than failing —
-    the pure-stdlib path (no Script available) still works."""
+    the pure-stdlib path (no Script available) still works.
+
+    `run_mypy=True` (needs `py_path` on disk + the GitNexusMCP mypy config) adds a
+    `mypy` key — type errors that api_grounding's name-only check cannot catch.
+    Gracefully "skipped" when mypy / the config / the file is unavailable."""
     result = {"syntax": "pass", "structure": "pass", "dataflow": "pass"}
 
     try:
@@ -43,7 +52,46 @@ def validate(py_source: str, ir: dict, script_root=None) -> dict:
 
     # API reality check (best-effort; needs the Script library)
     result["api_grounding"] = _check_api_grounding(py_source, script_root)
+
+    if run_mypy:
+        result["mypy"] = _check_mypy(py_path, script_root)
     return result
+
+
+def _check_mypy(py_path, script_root):
+    """Run mypy on the generated .py (per-file, from GitNexusMCP/ with its config).
+
+    Returns "pass" | "skipped" | [error lines]. "skipped" whenever mypy / the config
+    / the file is missing or mypy hits a fatal error — never blocks on infra issues."""
+    if not py_path or script_root is None:
+        return "skipped"
+    py = Path(py_path)
+    gitnexus = Path(script_root).parent          # GitNexusMCP/  (script_root = .../Script)
+    ini = gitnexus / "mypy_skip_known_issue.ini"
+    if not py.is_file() or not ini.is_file():
+        return "skipped"
+    # Path arg relative to GitNexusMCP when possible (cleanest module inference); else abs.
+    try:
+        arg = str(py.resolve().relative_to(gitnexus.resolve()))
+    except ValueError:
+        arg = str(py.resolve())
+    env = dict(os.environ, MYPYPATH=str(gitnexus.resolve()))
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-m", "mypy", "--config-file", str(ini.resolve()),
+             "--follow-imports=silent", "--no-error-summary", "--no-color-output", arg],
+            cwd=str(gitnexus), env=env, capture_output=True, text=True, timeout=300,
+        )
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        return "skipped"
+    if proc.returncode == 0:
+        return "pass"
+    if proc.returncode >= 2:
+        return "skipped"                         # mypy fatal/config error — don't block
+    name = py.name
+    errs = [ln.strip() for ln in proc.stdout.splitlines()
+            if ": error:" in ln and name in ln]
+    return errs or "pass"
 
 
 # ---------------------------------------------------------------------------

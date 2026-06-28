@@ -18,7 +18,7 @@ from __future__ import annotations
 from pattern_generator.validator import validate
 from pattern_generator.review import build_review_prompt
 
-_GATE_KEYS = ("syntax", "structure", "dataflow", "api_grounding")
+_GATE_KEYS = ("syntax", "structure", "dataflow", "api_grounding", "mypy")
 
 
 def gate_failures(report: dict) -> dict:
@@ -52,7 +52,9 @@ def build_repair_prompt(pattern_src: str, ir: dict, report: dict, defaults: str 
     return "\n\n".join(parts)
 
 
-def run_gate(pattern_src: str, ir: dict, script_root=None) -> dict:
-    """Validate and return (report, failures)."""
-    report = validate(pattern_src, ir, script_root=script_root)
+def run_gate(pattern_src: str, ir: dict, script_root=None,
+             py_path=None, run_mypy: bool = False) -> dict:
+    """Validate and return (report, failures). Threads py_path/run_mypy to validate."""
+    report = validate(pattern_src, ir, script_root=script_root,
+                      py_path=py_path, run_mypy=run_mypy)
     return {"report": report, "failures": gate_failures(report)}

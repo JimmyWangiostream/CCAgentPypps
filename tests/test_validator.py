@@ -1,6 +1,10 @@
+import importlib.util
 from pathlib import Path
 
-from pattern_generator.validator import validate
+import pytest
+
+from pattern_generator.validator import validate, _check_mypy
+from pattern_generator.config import PGConfig
 
 
 # Two sequential steps: step1 produces max_lba, step2 consumes it.
@@ -127,6 +131,47 @@ def test_dataflow_catches_rerandomized_consume():
 def test_dataflow_passes_when_threaded():
     out = validate(GOOD, SEQ_IR)
     assert out["dataflow"] == "pass"
+
+
+# ---------------------------------------------------------------------------
+# mypy gate (opt-in)
+# ---------------------------------------------------------------------------
+
+_SCRIPT_ROOT = PGConfig().script_root
+_MYPY_OK = (importlib.util.find_spec("mypy") is not None
+            and (_SCRIPT_ROOT.parent / "mypy_skip_known_issue.ini").is_file())
+_skip_mypy = pytest.mark.skipif(not _MYPY_OK, reason="mypy / GitNexusMCP config not present")
+
+
+def test_validate_no_mypy_key_by_default():
+    out = validate(GOOD, SEQ_IR)               # run_mypy defaults False
+    assert "mypy" not in out
+
+
+def test_mypy_skipped_without_path():
+    assert _check_mypy(None, _SCRIPT_ROOT) == "skipped"
+
+
+def test_mypy_skipped_when_no_config(tmp_path):
+    f = tmp_path / "x.py"
+    f.write_text("x = 1\n", encoding="utf-8")
+    # script_root whose parent has no mypy_skip_known_issue.ini
+    assert _check_mypy(f, tmp_path / "Script") == "skipped"
+
+
+@_skip_mypy
+def test_mypy_clean_file_passes(tmp_path):
+    f = tmp_path / "ok.py"
+    f.write_text("x: int = 1\n", encoding="utf-8")
+    assert _check_mypy(f, _SCRIPT_ROOT) == "pass"
+
+
+@_skip_mypy
+def test_mypy_flags_type_error(tmp_path):
+    f = tmp_path / "bad.py"
+    f.write_text("x: int = 'not an int'\n", encoding="utf-8")
+    res = _check_mypy(f, _SCRIPT_ROOT)
+    assert isinstance(res, list) and any("error" in e.lower() for e in res)
 
 
 # ---------------------------------------------------------------------------

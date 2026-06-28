@@ -71,10 +71,12 @@ python generate_pattern.py assemble <GEN>/<ID>/ <PatternName>
 # Pipeline step 6: validate generated pattern against IR (+ API-reality check vs Script)
 python generate_pattern.py validate <GEN>/<PatternName>.py <GEN>/<ID>/<id>-ir.json
 #   optional: --script-root <path>  (defaults to PGConfig.script_root = GitNexusMCP/Script)
-#   Report keys: syntax, structure, dataflow, api_grounding. structure catches methods
+#   Report keys: syntax, structure, dataflow, api_grounding, mypy. structure catches methods
 #   defined OUTSIDE the pattern class (parses but process() runs nothing = false PASS) +
 #   def-after-__main__ + missing planned methods; dataflow flags a consumer that overwrites
-#   a consumed var without reading it; api_grounding adds missing_required_arg.
+#   a consumed var without reading it; api_grounding adds missing_required_arg; mypy runs the
+#   type-check gate (per-file, from GitNexusMCP/ + its ini) — catches type errors api_grounding
+#   can't; "skipped" if mypy/config absent. --no-mypy to disable. Step 6b is now automatic.
 #   Appends findings to gate_logs/<id>.gate_log.md (history). --gate-log-dir to override.
 
 # Pipeline step 7 (gate loop): validate -> on FAIL emit a repair prompt (validator findings

@@ -53,6 +53,8 @@ def main():
                          "(default: PGConfig.script_root)")
     p3.add_argument("--gate-log-dir", default=None,
                     help="folder for the append-only gate history (default: PGConfig.gate_log_dir)")
+    p3.add_argument("--no-mypy", action="store_true",
+                    help="skip the mypy type-check gate (default: run it)")
 
     sub.add_parser("rules", help="list the prescriptive rule pack (the pitfall checklist)")
 
@@ -81,6 +83,8 @@ def main():
     pg.add_argument("--gate-log-dir", default=None,
                     help="folder for all gate by-products + append-only history "
                          "(default: PGConfig.gate_log_dir)")
+    pg.add_argument("--no-mypy", action="store_true",
+                    help="skip the mypy type-check gate (default: run it)")
 
     args = ap.parse_args()
 
@@ -141,7 +145,8 @@ def main():
         py_file = Path(args.py_file)
         src = py_file.read_text(encoding="utf-8")
         script_root = args.script_root or base.script_root
-        report = validate(src, ir, script_root=script_root)
+        report = validate(src, ir, script_root=script_root,
+                          py_path=str(py_file), run_mypy=not args.no_mypy)
         print(json.dumps(report, ensure_ascii=False, indent=2))
         log_dir = Path(args.gate_log_dir) if args.gate_log_dir else base.gate_log_dir
         lp = append_record(log_dir, ir["pattern_id"], py_file.name, "validate", None, report)
@@ -200,7 +205,8 @@ def main():
         py_file = Path(args.py_file)
         src = py_file.read_text(encoding="utf-8")
         script_root = args.script_root or base.script_root
-        gate = run_gate(src, ir, script_root=script_root)
+        gate = run_gate(src, ir, script_root=script_root,
+                        py_path=str(py_file), run_mypy=not args.no_mypy)
         print(json.dumps(gate["report"], ensure_ascii=False, indent=2))
 
         # All by-products + history live in ONE folder, named by pattern_id.
