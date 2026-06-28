@@ -123,13 +123,15 @@ class TestRetrieve:
         res = r.retrieve("zzzz nonsense qqqq", top_n=5)
         assert not res.has_match
 
-    def test_essence_has_concept_entity_and_conflicts(self):
+    def test_essence_has_concept_and_entity(self):
         r = Retriever(use_dense=False)
         res = r.retrieve("write booster set flag", top_n=5)
         text = build_essence(res)
         assert "Wiki essence" in text
         assert "entities:" in text
-        assert "authority overrides" in text  # conflict surfaced
+        # The weak conflict pointer was removed from essence — the RESOLVED overrides
+        # now live in wiki/default.md (always-injected). See test_defaults.py.
+        assert "authority overrides" not in text
 
     def test_essence_no_match_message(self):
         r = Retriever(use_dense=False)

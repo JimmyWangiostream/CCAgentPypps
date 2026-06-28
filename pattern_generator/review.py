@@ -62,12 +62,19 @@ over the original. If nothing needs changing, re-emit it unchanged and add a fin
 comment `# REVIEW: no defects found`. Do not output a diff or partial methods."""
 
 
-def build_review_prompt(pattern_src: str, ir: dict, rules=None) -> str:
-    """Assemble the review prompt: instructions + checkpoints + rules + the code."""
+def build_review_prompt(pattern_src: str, ir: dict, rules=None, defaults: str = "") -> str:
+    """Assemble the review prompt: instructions + checkpoints + rules + defaults + code."""
     rules = rules if rules is not None else select_rules(pattern_src, _ir_terms(ir))
 
     parts = [REVIEW_INSTRUCTIONS,
              f"Pattern: {ir.get('pattern_id')} — {ir.get('title', '')}"]
+
+    if defaults.strip():
+        parts.append(
+            "## Project defaults (default.md) — the code MUST comply with EVERY applicable "
+            "default below (UserPrompt > ModelDefault). Flag any violation (e.g. a hardcoded "
+            "lun=0 where the rule says MaxCapacity Enabled LUN). This is checked as a whole — "
+            "you do not need a per-rule entry.\n" + defaults.strip())
 
     cps = _checkpoints(ir)
     if cps:

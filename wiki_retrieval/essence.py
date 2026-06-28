@@ -72,10 +72,10 @@ def build_essence(result, max_concepts: int = 3, max_entities: int = 5,
             via = f"  ← referenced by {src}" if src else ""
             lines.append(f"- {doc.path}{via}")
 
-    if result.conflicts:
-        lines.append("authority overrides (conflicts win):")
-        for c in result.conflicts:
-            affected = ", ".join(f"[[{a}]]" for a in c.affected)
-            lines.append(f"- [{c.rule}] {c.title} → affects {affected}")
+    # NOTE: conflict/authority overrides used to be injected here as a weak pointer
+    # ("Default LUN Selection → affects [[lun]]") — title only, no resolved value, so
+    # the model knew an override existed but not what to do (it hardcoded lun=0). The
+    # RESOLVED overrides now live in wiki/default.md, which is ALWAYS injected by the
+    # prompt builders (see wiki_retrieval.defaults). conflicts.md stays for audit.
 
     return "\n".join(lines)

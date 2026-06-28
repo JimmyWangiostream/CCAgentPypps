@@ -19,6 +19,7 @@ from pattern_generator.stepwise import (
 )
 from wiki_retrieval.retrieve import retrieve
 from wiki_retrieval.essence import build_essence, format_top_refs
+from wiki_retrieval.defaults import load_defaults
 
 
 def _unit_prompt_filename(unit: dict) -> str:
@@ -164,6 +165,7 @@ def prepare_pattern(ir_path, config: PGConfig | None = None) -> dict:
             wiki_has_match=wiki["has_match"],
             grounding_mode=config.grounding_mode,
             code_candidates=code_candidates,
+            defaults=load_defaults(config.wiki_path),
         )
         first_prompt_file = _unit_prompt_filename(first_unit)
         run.write_text(first_prompt_file, prompt)
@@ -231,6 +233,7 @@ def prepare_unit(run_dir, unit_index: int, config: PGConfig | None = None) -> di
         wiki_has_match=wiki["has_match"],
         grounding_mode=mode,
         code_candidates=code_candidates,
+        defaults=load_defaults(cfg.wiki_path),
     )
     fname = _unit_prompt_filename(unit)
     (run_dir / fname).write_text(prompt, encoding="utf-8")

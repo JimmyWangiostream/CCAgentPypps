@@ -125,6 +125,14 @@ cd GitNexusMCP && python -m mypy --config-file mypy_skip_known_issue.ini --follo
 # Wiki grounding: build the layered index, then query it
 python wiki_index.py build              # steps 2+3: reference graph + (optional) dense
 python wiki_retrieve.py "<query>"       # steps 4+5: RRF retrieval + extractive essence
+
+# Project defaults: merge wiki/UserPrompt + wiki/ModelDefault (+conflicts) -> wiki/default.md
+python generate_pattern.py build-defaults
+#   default.md = the resolved "what to do when the TC is silent" policy (UserPrompt >
+#   ModelDefault, + CustomerReq constraints), with per-line provenance. It is ALWAYS
+#   injected into unit/wholefile/review prompts (NOT top-N — policy is cross-cutting).
+#   Regenerate after editing wiki/UserPrompt|ModelDefault|conflicts. (Replaced the weak
+#   essence "conflict pointer" that named an override but not its resolved value.)
 ```
 
 ## Architecture: TC → Pattern Pipeline
@@ -223,8 +231,12 @@ conflict is recorded in `wiki/conflicts.md`:
 - **Rule 1**: `CustomerReq` > `Spec`
 - **Rule 2**: `UserPrompt` > `ModelDefault`
 
-The two orders are independent of each other. The retriever surfaces any conflict whose
-"Affected Wiki Pages" intersect the retrieved set, so overrides reach the generator.
+The two orders are independent of each other. The RESOLVED overrides (the actual values to
+use, with their how-to-apply) are merged into `wiki/default.md` (`build-defaults`) and
+**always injected** into every prompt — so the generator gets "default LUN = MaxCapacity
+Enabled LUN, do NOT hardcode lun=0" as an imperative, not just a pointer that an override
+exists. `wiki/default.md` = ModelDefault base + UserPrompt overrides + CustomerReq
+constraints, per-line provenance; `wiki/conflicts.md` stays as the audit record.
 
 ## Tests
 

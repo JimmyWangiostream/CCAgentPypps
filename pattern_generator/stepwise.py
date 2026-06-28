@@ -504,6 +504,7 @@ def build_one_unit_prompt(
     wiki_has_match: bool = True,
     grounding_mode: str = "gitnexus",
     code_candidates: list | None = None,
+    defaults: str = "",
 ) -> str:
     """Build the LLM generation prompt for a single unit (one step, or one loop).
 
@@ -624,6 +625,15 @@ def build_one_unit_prompt(
                 "directly; if nothing fits, emit TODO-REVIEW-NO-CODE-REF (or "
                 "TODO-REVIEW-BOTH-MISS if wiki also missed) and tag calls # TODO human-confirm."
             )
+
+    # Project defaults (default.md) — ALWAYS injected (not top-N): the resolved
+    # UserPrompt>ModelDefault policy to apply when the TC omits a detail. This is
+    # what stops e.g. a hardcoded lun=0 against the "MaxCapacity Enabled LUN" rule.
+    if defaults.strip():
+        parts.append(
+            "## Project defaults (default.md) — when the TC OMITS a detail, FOLLOW these "
+            "(UserPrompt > ModelDefault). Do NOT hardcode a value these resolve (e.g. lun=0). "
+            "Tag any use as `# src[wiki]: default.md`.\n" + defaults.strip())
 
     # Upstream continuity — embed already-generated methods so style/naming/helpers
     # stay consistent and missed dependencies can still be wired via self.*.

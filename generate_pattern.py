@@ -56,6 +56,9 @@ def main():
 
     sub.add_parser("rules", help="list the prescriptive rule pack (the pitfall checklist)")
 
+    sub.add_parser("build-defaults",
+                   help="merge wiki/UserPrompt + wiki/ModelDefault (+conflicts) -> wiki/default.md")
+
     pr = sub.add_parser("review",
                         help="build the review->repair prompt (checkpoints + rule pack + code)")
     pr.add_argument("py_file")
@@ -147,6 +150,12 @@ def main():
         from pattern_generator.rules import RULES, format_rules
         print(f"Rule pack — {len(RULES)} prescriptive rules (the pitfall checklist):\n")
         print(format_rules(RULES))
+    elif args.cmd == "build-defaults":
+        from wiki_retrieval.defaults import write_defaults
+        path = write_defaults(PGConfig().wiki_path)
+        print(f"Wrote {path} ({len(path.read_text(encoding='utf-8').splitlines())} lines)")
+        print("This is the single always-injected 'project defaults' doc "
+              "(UserPrompt > ModelDefault). Regenerate after editing the sources.")
     elif args.cmd == "prepare-wholefile":
         from pattern_generator.wholefile import build_wholefile_prompt
         from pattern_generator.run_logger import RunDir
@@ -158,7 +167,9 @@ def main():
         run = RunDir(gen_dir, ir["pattern_id"])
         scaffold = build_scaffold(ir)
         run.write_text("scaffold.py", scaffold)
-        prompt = build_wholefile_prompt(ir, script_root, scaffold=scaffold)
+        from wiki_retrieval.defaults import load_defaults
+        prompt = build_wholefile_prompt(ir, script_root, scaffold=scaffold,
+                                        defaults=load_defaults(base.wiki_path))
         run.write_text("wholefile_prompt.txt", prompt)
         print(f"Run dir: {run.path}")
         print(f"Next (LLM): read {run.path}/wholefile_prompt.txt → write the COMPLETE "
@@ -166,10 +177,11 @@ def main():
         print(f"Then: python generate_pattern.py validate {gen_dir}/<PatternName>.py {args.ir_file}")
     elif args.cmd == "review":
         from pattern_generator.review import build_review_prompt
+        from wiki_retrieval.defaults import load_defaults
         ir = json.loads(Path(args.ir_file).read_text(encoding="utf-8"))
         py_file = Path(args.py_file)
         src = py_file.read_text(encoding="utf-8")
-        prompt = build_review_prompt(src, ir)
+        prompt = build_review_prompt(src, ir, defaults=load_defaults(PGConfig().wiki_path))
         out_path = py_file.with_name(py_file.stem + "_review_prompt.txt")
         out_path.write_text(prompt, encoding="utf-8")
         print(f"Review prompt: {out_path}")
@@ -180,7 +192,9 @@ def main():
         from pattern_generator.driver import run_gate, build_repair_prompt
         from pattern_generator.review import build_review_prompt
         from pattern_generator.gate_log import append_record
+        from wiki_retrieval.defaults import load_defaults
         base = PGConfig()
+        defaults = load_defaults(base.wiki_path)
         ir = json.loads(Path(args.ir_file).read_text(encoding="utf-8"))
         pattern_id = ir["pattern_id"]
         py_file = Path(args.py_file)
@@ -208,7 +222,7 @@ def main():
                 print(f"Gate log: {lp}")
                 state_file.unlink(missing_ok=True)
                 sys.exit(1)
-            prompt = build_repair_prompt(src, ir, gate["report"])
+            prompt = build_repair_prompt(src, ir, gate["report"], defaults=defaults)
             out_path = log_dir / f"{pattern_id}_repair_prompt.txt"
             out_path.write_text(prompt, encoding="utf-8")
             state_file.write_text(json.dumps({"round": rnd}), encoding="utf-8")
@@ -219,7 +233,7 @@ def main():
             sys.exit(1)
         else:
             state_file.unlink(missing_ok=True)  # converged; reset the loop counter
-            prompt = build_review_prompt(src, ir)
+            prompt = build_review_prompt(src, ir, defaults=defaults)
             out_path = log_dir / f"{pattern_id}_review_prompt.txt"
             out_path.write_text(prompt, encoding="utf-8")
             print("GATE PASS (structural). A structural pass is NOT rule-clean — do one "

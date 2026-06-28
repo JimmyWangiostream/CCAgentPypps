@@ -91,7 +91,8 @@ def _idiom_anchors(units: list, script_root) -> str:
         "\n\n".join(blocks)
 
 
-def build_wholefile_prompt(ir: dict, script_root, scaffold: str | None = None) -> str:
+def build_wholefile_prompt(ir: dict, script_root, scaffold: str | None = None,
+                           defaults: str = "") -> str:
     units = generation_units(ir)
     scaffold = scaffold if scaffold is not None else build_scaffold(ir)
     rules = select_rules("", _ir_terms(ir))
@@ -99,6 +100,12 @@ def build_wholefile_prompt(ir: dict, script_root, scaffold: str | None = None) -
     parts = [WHOLEFILE_INSTRUCTIONS,
              f"Pattern: {ir.get('pattern_id')} — {ir.get('title', '')}",
              _unit_plan(units)]
+
+    if defaults.strip():
+        parts.append(
+            "## Project defaults (default.md) — when the TC OMITS a detail, FOLLOW these "
+            "(UserPrompt > ModelDefault). Do NOT hardcode a value these resolve (e.g. lun=0). "
+            "Tag any use as `# src[wiki]: default.md`.\n" + defaults.strip())
 
     contract = _dataflow_contract(units)
     if contract:

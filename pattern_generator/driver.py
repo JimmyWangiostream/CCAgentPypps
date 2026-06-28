@@ -42,13 +42,13 @@ def _findings_block(fails: dict) -> str:
     return "\n".join(lines)
 
 
-def build_repair_prompt(pattern_src: str, ir: dict, report: dict) -> str:
+def build_repair_prompt(pattern_src: str, ir: dict, report: dict, defaults: str = "") -> str:
     """Repair prompt = concrete validator findings + the Stage-2 review prompt."""
     fails = gate_failures(report)
     parts = []
     if fails:
         parts.append(_findings_block(fails))
-    parts.append(build_review_prompt(pattern_src, ir))
+    parts.append(build_review_prompt(pattern_src, ir, defaults=defaults))
     return "\n\n".join(parts)
 
 
