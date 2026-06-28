@@ -1,5 +1,8 @@
 from pattern_generator.config import PGConfig
-from wiki_retrieval.defaults import build_defaults_md, load_defaults, write_defaults
+from wiki_retrieval.defaults import (
+    build_defaults_md, load_defaults, write_defaults,
+    load_overrides, retrieve_modeldefault, modeldefault_block,
+)
 from pattern_generator.stepwise import build_one_unit_prompt, generation_units
 from pattern_generator.review import build_review_prompt
 from pattern_generator.wholefile import build_wholefile_prompt
@@ -87,3 +90,33 @@ def test_review_prompt_injects_defaults_with_enforcement():
 def test_wholefile_injects_defaults():
     p = build_wholefile_prompt(SMALL_IR, "no/such/script", defaults="MYDEFAULTS-XYZ")
     assert "MYDEFAULTS-XYZ" in p
+
+
+# --- Stage 6: split injection (overrides always, ModelDefault base retrieved) ---
+
+def test_load_overrides_has_overrides_not_base():
+    ov = load_overrides(WIKI)
+    assert "MaxCapacity" in ov                 # the LUN override is present
+    assert "WriteBooster LUN Restriction" in ov
+    assert "## (4) ModelDefault base" not in ov  # the bulky base is excluded
+    assert "### data_operations" not in ov
+    # overrides are a small fraction of the full doc
+    assert len(ov) < len(load_defaults(WIKI)) / 5
+
+
+def test_retrieve_modeldefault_picks_topic_for_write():
+    hits = retrieve_modeldefault("WRITE(10) random LBA data", WIKI, k=1)
+    assert hits, "expected a ModelDefault topic"
+    stem, body = hits[0]
+    assert stem == "data_operations"
+    assert body
+
+
+def test_modeldefault_block_renders_provenance():
+    blk = modeldefault_block("WRITE(10) random LBA", WIKI, k=1)
+    assert "ModelDefault base (retrieved" in blk
+    assert "_← ModelDefault_" in blk
+
+
+def test_retrieve_modeldefault_empty_query():
+    assert retrieve_modeldefault("", WIKI) == []

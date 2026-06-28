@@ -122,3 +122,62 @@ def load_defaults(wiki_root) -> str:
     if path.is_file():
         return path.read_text(encoding="utf-8")
     return build_defaults_md(wiki_root)
+
+
+# ---------------------------------------------------------------------------
+# Split injection — §1-§3 (small, cross-cutting, ALWAYS injected) vs §4 (the bulky
+# ModelDefault base, RETRIEVED per step). The overrides fire on "TC is silent",
+# which has no keyword to retrieve on, so they must always be present; the base is
+# topic-specific (data_operations / power_management / …), so top-N works for it.
+# ---------------------------------------------------------------------------
+
+_BASE_HEADER = "## (4) ModelDefault base"
+
+
+def load_overrides(wiki_root) -> str:
+    """Only §1-§3 of default.md: UserPrompt overrides + CustomerReq constraints +
+    resolved overrides (~1.3KB). This is what is ALWAYS injected into unit prompts."""
+    md = load_defaults(wiki_root)
+    idx = md.find(_BASE_HEADER)
+    return (md[:idx].rstrip() + "\n") if idx != -1 else md
+
+
+_MD_CACHE: dict = {}
+
+
+def _modeldefault_docs(wiki_root) -> list:
+    out = []
+    for f in sorted((Path(wiki_root) / "ModelDefault").glob("*.md")):
+        if f.name == "README.md":
+            continue
+        out.append((f.stem, f.read_text(encoding="utf-8").strip()))
+    return out
+
+
+def retrieve_modeldefault(query: str, wiki_root, k: int = 1) -> list:
+    """Top-k ModelDefault topic files for a step query (BM25; cached per wiki_root).
+
+    The bulky §4 base is retrieved instead of always-injected — this is where the
+    token saving lives. Returns [(stem, body), ...]."""
+    if not query or not query.strip():
+        return []
+    from wiki_retrieval.bm25 import BM25Index
+    key = str(Path(wiki_root).resolve())
+    if key not in _MD_CACHE:
+        docs = _modeldefault_docs(wiki_root)
+        bm = BM25Index([(stem, f"{stem.replace('_', ' ')} {body}") for stem, body in docs])
+        _MD_CACHE[key] = (dict(docs), bm)
+    bodies, bm = _MD_CACHE[key]
+    return [(stem, bodies[stem]) for stem, _score in bm.rank(query, top_k=k)]
+
+
+def modeldefault_block(query: str, wiki_root, k: int = 1) -> str:
+    """Render the retrieved ModelDefault topic(s) for prompt injection."""
+    hits = retrieve_modeldefault(query, wiki_root, k=k)
+    if not hits:
+        return ""
+    parts = ["## ModelDefault base (retrieved for this step; use only if TC AND "
+             "UserPrompt are silent)"]
+    for stem, body in hits:
+        parts.append(f"### {stem}  _← ModelDefault_\n{body}")
+    return "\n\n".join(parts)

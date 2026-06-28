@@ -19,7 +19,7 @@ from pattern_generator.stepwise import (
 )
 from wiki_retrieval.retrieve import retrieve
 from wiki_retrieval.essence import build_essence, format_top_refs
-from wiki_retrieval.defaults import load_defaults
+from wiki_retrieval.defaults import load_overrides, modeldefault_block
 
 
 def _unit_prompt_filename(unit: dict) -> str:
@@ -56,6 +56,15 @@ def _unit_wiki(unit: dict, wiki_path) -> dict:
         "top": format_top_refs(result),
         "has_match": result.has_match,
     }
+
+
+def _unit_defaults(unit: dict, wiki_path) -> str:
+    """Per-unit defaults block: §1-§3 overrides (always) + the single most relevant
+    ModelDefault topic (retrieved). Keeps unit prompts small (~4KB vs ~30KB) while
+    the absence-triggered overrides (LUN etc.) are never missed."""
+    overrides = load_overrides(wiki_path)
+    md = modeldefault_block(_unit_query(unit), wiki_path, k=1)
+    return overrides + ("\n\n" + md if md else "")
 
 
 def _unit_code(unit: dict, script_root, k: int = 5) -> list:
@@ -165,7 +174,7 @@ def prepare_pattern(ir_path, config: PGConfig | None = None) -> dict:
             wiki_has_match=wiki["has_match"],
             grounding_mode=config.grounding_mode,
             code_candidates=code_candidates,
-            defaults=load_defaults(config.wiki_path),
+            defaults=_unit_defaults(first_unit, config.wiki_path),
         )
         first_prompt_file = _unit_prompt_filename(first_unit)
         run.write_text(first_prompt_file, prompt)
@@ -233,7 +242,7 @@ def prepare_unit(run_dir, unit_index: int, config: PGConfig | None = None) -> di
         wiki_has_match=wiki["has_match"],
         grounding_mode=mode,
         code_candidates=code_candidates,
-        defaults=load_defaults(cfg.wiki_path),
+        defaults=_unit_defaults(unit, cfg.wiki_path),
     )
     fname = _unit_prompt_filename(unit)
     (run_dir / fname).write_text(prompt, encoding="utf-8")
