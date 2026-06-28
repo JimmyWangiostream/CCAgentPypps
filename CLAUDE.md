@@ -190,9 +190,10 @@ Layered retrieval over the ingested wiki (`wiki/concepts/` + `wiki/entities/`):
 - `assemble.py`: Merges scaffold + `unit_NN_*_methods.py` into the final `.py` (+ `retrieval_debug.md`)
 - `validator.py`: Validates `.py` against IR — `syntax` + `structure` (every stepN/helper is a class member; no method outside the class / after `if __name__`; planned methods present; loop_count) + `dataflow` (a consumer must not overwrite a `consumes` var without reading it) + `api_grounding`
 - `api_grounding.py`: AST reality check of `api.`/`ExecuteCMD.`/`lib.` calls vs Script — unknown symbol / unknown kwarg / too-many-positional / **missing_required_arg**
-- `rules.py`: prescriptive rule pack (do/don't with WRONG/CORRECT) — Query-vs-Descriptor, volatile-flag assert, exception naming, lba reuse, reset helper; `select_rules` (keyword) + `format_rules`
-- `review.py`: `build_review_prompt` — IR checkpoints (each `expected`/`fail_condition` must be implemented AND asserted) + selected rules + whole file → LLM emits a corrected file
-- `wholefile.py`: `build_wholefile_prompt` — Stage-3 coherent authoring (unit plan + `self.*` contract + `idioms.py` worked-snippet anchors + rule pack)
+- `rules.py`: loader over `review_refs/*.md` — the pitfall docs ARE the rule pack (add a rule = add a `.md`, no code). `select_refs(text, cap=6)` keyword-selects the relevant docs (BM25, score>0 only), `format_refs` renders them. This is the SEMANTIC layer; the deterministic API-detail layer is `api_grounding.py` (the two are complementary — an LLM review guesses param/enum/signature, the AST index never does).
+- `review_refs/`: markdown pitfall docs (volatile-flag-assert-discipline, step03-query-vs-descriptor-trap, exception-naming-convention, writebooster-ssu-reset-pitfalls, …) ported from the external code-review agent. Drop a new `.md` here to add a review rule.
+- `review.py`: `build_review_prompt` — IR checkpoints (each `expected`/`fail_condition` must be implemented AND asserted) + keyword-selected review references + the normalized TC flow (step-compliance cross-check) + whole file → LLM emits a corrected file. `find_tc_flow(ir, tc_dir)` loads `TC/<id>-normalized-test-flow.md`.
+- `wholefile.py`: `build_wholefile_prompt` — Stage-3 coherent authoring (unit plan + `self.*` contract + `idioms.py` worked-snippet anchors + review references)
 - `driver.py` + `gate_log.py`: the `finish` gate loop — validate→repair-prompt→re-validate; every run's findings appended to `gate_logs/<id>.gate_log.md` (all by-products in that one folder)
 
 ### Grounding Sources

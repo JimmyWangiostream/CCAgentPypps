@@ -33,7 +33,7 @@ def test_build_wholefile_prompt_structure():
     p = build_wholefile_prompt(SMALL_IR, "no/such/script")
     assert "Unit plan" in p
     assert "Data-flow contract" in p and "self.max_lba" in p
-    assert "Rule pack" in p
+    assert "Review references" in p
     assert "COMPLETE file" in p
     assert "INSIDE the pattern class" in p
     assert "# @@PHASE_METHODS@@" in p          # scaffold embedded

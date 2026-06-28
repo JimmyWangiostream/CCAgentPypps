@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 
 from pattern_generator.stepwise import generation_units, build_scaffold
-from pattern_generator.rules import select_rules, format_rules
+from pattern_generator.rules import select_refs, format_refs
 from pattern_generator.idioms import find_idiom, format_idiom
 from pattern_generator.review import _ir_terms
 from pattern_generator.prepare import _unit_query
@@ -95,7 +95,7 @@ def build_wholefile_prompt(ir: dict, script_root, scaffold: str | None = None,
                            defaults: str = "") -> str:
     units = generation_units(ir)
     scaffold = scaffold if scaffold is not None else build_scaffold(ir)
-    rules = select_rules("", _ir_terms(ir))
+    refs = select_refs("", _ir_terms(ir))
 
     parts = [WHOLEFILE_INSTRUCTIONS,
              f"Pattern: {ir.get('pattern_id')} — {ir.get('title', '')}",
@@ -115,7 +115,7 @@ def build_wholefile_prompt(ir: dict, script_root, scaffold: str | None = None,
     if anchors:
         parts.append(anchors)
 
-    parts.append("## Rule pack (obey)\n" + format_rules(rules))
+    parts.append("## Review references (obey)\n" + format_refs(refs))
     parts.append("## Scaffold — fill the markers, output the COMPLETE file\n"
                  "```python\n" + scaffold.rstrip() + "\n```")
     parts.append("## Full IR (for reference)\n```json\n"

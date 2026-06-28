@@ -50,9 +50,11 @@ def _unit_wiki(unit: dict, wiki_path) -> dict:
     query = _unit_query(unit).strip()
     if not query:
         return {"essence": "", "top": [], "has_match": False}
-    result = retrieve(query, wiki_root=wiki_path)
+    # Generation is per-unit (×N, token-sensitive) -> top-3, not top-5 (few + exact
+    # signatures beats many candidate names; see api_grounding's injected facts).
+    result = retrieve(query, wiki_root=wiki_path, top_n=3, n_entity=3)
     return {
-        "essence": build_essence(result),
+        "essence": build_essence(result, max_entities=3),
         "top": format_top_refs(result),
         "has_match": result.has_match,
     }
@@ -90,7 +92,7 @@ def _record_defaults(run_dir, unit: dict, stem, init: bool = False) -> None:
                  f"overrides=always; modeldefault={stem or 'NONE'}\n")
 
 
-def _unit_code(unit: dict, script_root, k: int = 5) -> list:
+def _unit_code(unit: dict, script_root, k: int = 3) -> list:
     """Top-k candidate Script symbols for a unit (direct-grounding injection).
 
     Mirrors _unit_wiki: builds the same cmd/idn/name query and asks the

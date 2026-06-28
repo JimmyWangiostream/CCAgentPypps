@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 
-from pattern_generator.rules import select_rules, format_rules
+from pattern_generator.rules import select_refs, format_refs
 
 
 def _checkpoints(ir: dict) -> list:
@@ -50,21 +50,28 @@ file in view. Two obligations:
 1. CHECKPOINT COMPLIANCE — for EVERY checkpoint below, the code must (a) implement
    the step and (b) ENFORCE its expected/fail_condition with `raise api.PATTERN_ASSERT_*`
    (or assert). A checkpoint that is only logged, or missing, is a defect.
-2. RULE PACK — fix every violation of the prescriptive rules below (protocol path,
-   volatile-flag asserts, exception naming, write/read lba reuse, reset helper, …).
+2. REVIEW REFERENCES — fix every violation of the pitfall references below (protocol
+   path, volatile-flag asserts, exception naming, write/read lba reuse, reset helper, …).
+3. TC COMPLIANCE — cross-check the code against the normalized test flow below: every
+   TC step must be implemented IN ORDER and match the specified protocol path.
 
 Also apply global refactors the per-method generator could not: factor duplicated
 reset blocks into one `_perform_reset` helper, thread shared state via self.*,
 keep every stepN/helper INSIDE the class.
+
+NOTE on API details: the deterministic api_grounding gate verifies exact param names,
+enum members and signatures separately — but do NOT invent API; if unsure of a
+signature/enum, read the real Script source rather than guess.
 
 OUTPUT: emit the COMPLETE corrected file in one ```python block, ready to write
 over the original. If nothing needs changing, re-emit it unchanged and add a final
 comment `# REVIEW: no defects found`. Do not output a diff or partial methods."""
 
 
-def build_review_prompt(pattern_src: str, ir: dict, rules=None, defaults: str = "") -> str:
-    """Assemble the review prompt: instructions + checkpoints + rules + defaults + code."""
-    rules = rules if rules is not None else select_rules(pattern_src, _ir_terms(ir))
+def build_review_prompt(pattern_src: str, ir: dict, refs=None, defaults: str = "",
+                        tc_flow: str = "") -> str:
+    """Assemble the review prompt: instructions + checkpoints + references + TC flow + code."""
+    refs = refs if refs is not None else select_refs(pattern_src, _ir_terms(ir))
 
     parts = [REVIEW_INSTRUCTIONS,
              f"Pattern: {ir.get('pattern_id')} — {ir.get('title', '')}"]
@@ -88,7 +95,22 @@ def build_review_prompt(pattern_src: str, ir: dict, rules=None, defaults: str = 
             lines.append(row)
         parts.append("\n".join(lines))
 
-    parts.append("## Prescriptive rules (fix every violation)\n" + format_rules(rules))
+    parts.append("## Review references (pitfalls — fix every violation)\n" + format_refs(refs))
+
+    if tc_flow.strip():
+        parts.append("## Normalized test flow (the code must implement every step in order)\n"
+                     + tc_flow.strip())
+
     parts.append("## Current pattern source (review & correct the WHOLE file)\n"
                  "```python\n" + pattern_src.rstrip() + "\n```")
     return "\n\n".join(parts)
+
+
+def find_tc_flow(ir: dict, tc_dir) -> str:
+    """Best-effort: read TC/<id>-normalized-test-flow.md for the pattern (or '')."""
+    from pathlib import Path
+    pid = (ir.get("pattern_id") or "").lower().replace("_", "-")
+    if not pid:
+        return ""
+    f = Path(tc_dir) / f"{pid}-normalized-test-flow.md"
+    return f.read_text(encoding="utf-8", errors="ignore") if f.is_file() else ""

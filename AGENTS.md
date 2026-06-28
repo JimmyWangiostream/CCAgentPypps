@@ -95,10 +95,13 @@ Generate a UFS test pattern for TC/<file>.md. Run, in order:
   not re-derive a var it should inherit), plus api `missing_required_arg`.
 - `finish` — gate driver: validate; on FAIL emit a repair prompt (validator findings +
   review) and loop (`--max-rounds`, default 3); on PASS emit the review prompt.
-- `review` — build the review→repair prompt (IR checkpoints + rule pack + code).
-- `rules` — print the prescriptive rule pack (the pitfall checklist).
+- `review` — build the review→repair prompt: IR checkpoints + the **relevant review
+  references** (keyword-selected pitfall docs, cap 6) + the **normalized TC flow**
+  (cross-checked for step compliance) + code.
+- `rules` — list the review-reference pitfall docs in `pattern_generator/review_refs/`
+  (add a rule = drop a `.md` there; no code change — see "Two review layers" below).
 - `prepare-wholefile` — Stage-3 alternative: one whole-file authoring prompt
-  (idiom anchors + rule pack + data-flow contract) instead of per-unit fragments.
+  (idiom anchors + review references + data-flow contract) instead of per-unit fragments.
 - `build-defaults` — merge `wiki/UserPrompt` + `wiki/ModelDefault` (+ `conflicts.md`) →
   `wiki/default.md`: the resolved "what to do when the TC is silent" policy
   (UserPrompt > ModelDefault + CustomerReq constraints). Regenerate after editing those.
@@ -117,8 +120,25 @@ Generate a UFS test pattern for TC/<file>.md. Run, in order:
 - **Fail points (per run + history):** `gate_logs/<pattern_id>.gate_log.md` —
   append-only, timestamped, every `validate`/`finish` run's findings. The same folder
   holds the transient `<id>_repair_prompt.txt` / `_review_prompt.txt` / `_gate_state.json`.
-- **Pitfall checklist (the rules):** `python generate_pattern.py rules`, source in
-  `pattern_generator/rules.py`.
+- **Pitfall checklist (the review references):** `python generate_pattern.py rules`,
+  docs in `pattern_generator/review_refs/*.md` (loader: `pattern_generator/rules.py`).
+
+### Two review layers (semantic vs deterministic — they are complementary)
+The review deliberately splits into two layers, each doing only what it is uniquely good at:
+- **Semantic layer = references-driven LLM review** (`review`/`finish`). Protocol path,
+  volatile-flag asserts, reset determinism, exception naming, TC-step compliance, … live
+  as markdown pitfall docs in `review_refs/`. **Adding a new rule = adding a `.md`** (no
+  hand-coded check); the relevant docs are keyword-selected per pattern (cap 6) so the
+  folder can grow without bloating any one prompt.
+- **Deterministic layer = AST api-facts** (`pattern_generator/api_grounding.py`, surfaced
+  by `validate`/`finish`). Exact param names, enum members, signatures — the one thing an
+  LLM reliably guesses wrong. The LLM review must NOT invent API; if unsure of a
+  signature/enum it reads real Script source, and the AST gate catches any residual guess.
+
+### Generation grounding is top-3 (not top-5)
+Per-unit prompts inject **top-3** wiki essence + **top-3** code candidates (token-sensitive
+×N path). Correctness of API details comes from the deterministic api-facts above, not from
+piling on more candidate names.
 - **Defaults provenance:** `<run>/defaults_debug.md` (deterministic — which default
   overrides + ModelDefault topic were OFFERED to each unit) + `retrieval_debug.md` (which
   embeds it, alongside the model's self-reported `# src[wiki]` usage).

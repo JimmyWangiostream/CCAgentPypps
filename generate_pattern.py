@@ -152,9 +152,12 @@ def main():
         lp = append_record(log_dir, ir["pattern_id"], py_file.name, "validate", None, report)
         print(f"Gate log: {lp}")
     elif args.cmd == "rules":
-        from pattern_generator.rules import RULES, format_rules
-        print(f"Rule pack — {len(RULES)} prescriptive rules (the pitfall checklist):\n")
-        print(format_rules(RULES))
+        from pattern_generator.rules import all_ref_names, REFS_DIR
+        names = all_ref_names()
+        print(f"Review references — {len(names)} pitfall docs in {REFS_DIR}")
+        print("(add a rule = drop a .md here; review selects the relevant ones by keyword)\n")
+        for n in names:
+            print(f"- {n}")
     elif args.cmd == "build-defaults":
         from wiki_retrieval.defaults import write_defaults
         path = write_defaults(PGConfig().wiki_path)
@@ -181,12 +184,14 @@ def main():
               f"<PatternName>.py in {gen_dir}")
         print(f"Then: python generate_pattern.py validate {gen_dir}/<PatternName>.py {args.ir_file}")
     elif args.cmd == "review":
-        from pattern_generator.review import build_review_prompt
+        from pattern_generator.review import build_review_prompt, find_tc_flow
         from wiki_retrieval.defaults import load_defaults
+        base = PGConfig()
         ir = json.loads(Path(args.ir_file).read_text(encoding="utf-8"))
         py_file = Path(args.py_file)
         src = py_file.read_text(encoding="utf-8")
-        prompt = build_review_prompt(src, ir, defaults=load_defaults(PGConfig().wiki_path))
+        prompt = build_review_prompt(src, ir, defaults=load_defaults(base.wiki_path),
+                                     tc_flow=find_tc_flow(ir, base.repo_root / "TC"))
         out_path = py_file.with_name(py_file.stem + "_review_prompt.txt")
         out_path.write_text(prompt, encoding="utf-8")
         print(f"Review prompt: {out_path}")
@@ -195,11 +200,13 @@ def main():
     elif args.cmd == "finish":
         import sys
         from pattern_generator.driver import run_gate, build_repair_prompt
-        from pattern_generator.review import build_review_prompt
+        from pattern_generator.review import build_review_prompt, find_tc_flow
         from pattern_generator.gate_log import append_record
         from wiki_retrieval.defaults import load_defaults
         base = PGConfig()
         defaults = load_defaults(base.wiki_path)
+        tc_flow = find_tc_flow(json.loads(Path(args.ir_file).read_text(encoding="utf-8")),
+                               base.repo_root / "TC")
         ir = json.loads(Path(args.ir_file).read_text(encoding="utf-8"))
         pattern_id = ir["pattern_id"]
         py_file = Path(args.py_file)

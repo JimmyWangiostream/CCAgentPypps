@@ -1,35 +1,47 @@
-from pattern_generator.rules import RULES, Rule, select_rules, format_rules
+from pattern_generator.rules import select_refs, format_refs, all_ref_names
 
 
-def test_rules_have_unique_ids():
-    ids = [r.id for r in RULES]
-    assert len(ids) == len(set(ids))
-    assert all(isinstance(r, Rule) and r.keywords for r in RULES)
+def test_refs_are_shipped():
+    names = all_ref_names()
+    assert names  # the review_refs/ docs are present
+    assert "step03-query-vs-descriptor-trap" in names
+    assert "volatile-flag-assert-discipline" in names
 
 
 def test_select_query_vs_descriptor():
-    text = "step3 READ ATTRIBUTE (dExtendedUFSFeaturesSupport) confirm WB bit"
-    ids = {r.id for r in select_rules(text)}
-    assert "query-vs-descriptor" in ids
+    refs = select_refs("step3 READ ATTRIBUTE (dExtendedUFSFeaturesSupport) confirm WB bit")
+    names = {stem for stem, _ in refs}
+    assert "step03-query-vs-descriptor-trap" in names
 
 
 def test_select_volatile_flag_on_reset():
-    ids = {r.id for r in select_rules("verify fWriteBoosterEn after reset")}
-    assert "volatile-flag-assert" in ids
+    refs = select_refs("verify fWriteBoosterEn after reset")
+    names = {stem for stem, _ in refs}
+    assert "volatile-flag-assert-discipline" in names
 
 
 def test_select_via_extra_terms():
     # nothing in the bare text, but IR cmd tokens carry the signal
-    ids = {r.id for r in select_rules("do thing", extra_terms=("write(10)",))}
-    assert "lba-pool-dedup" in ids
+    refs = select_refs("do thing", extra_terms=("writebooster ssu reset",))
+    assert refs  # a matching doc is selected from the extra IR terms
 
 
-def test_format_includes_id_and_body():
-    rules = select_rules("read attribute dExtendedUFSFeaturesSupport")
-    out = format_rules(rules)
-    assert "query-vs-descriptor" in out
+def test_select_caps_results():
+    # a broad query that hits many docs is still capped
+    refs = select_refs("writebooster ssu reset flag attribute descriptor lba", cap=3)
+    assert len(refs) <= 3
+
+
+def test_select_returns_only_hits():
+    # BM25 returns score>0 only -> a query with no domain keyword selects nothing
+    assert select_refs("qqqzzz xyzzy nonexistent") == []
+
+
+def test_format_includes_stem_and_body():
+    out = format_refs(select_refs("read attribute dExtendedUFSFeaturesSupport"))
+    assert "step03-query-vs-descriptor-trap" in out
     assert "get_extended_ufs_features_support" in out
 
 
 def test_format_empty():
-    assert "no domain rules" in format_rules([])
+    assert "no matching review references" in format_refs([])
