@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import ast
 import difflib
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -199,11 +200,62 @@ def _walk_all_names(package_dir: Path) -> set:
 
 
 # ---------------------------------------------------------------------------
+# Deterministic API facts: real signatures + enum-member whitelist (the arbiter).
+# These exist so neither the model NOR a reviewer has to GUESS param names
+# (index= vs lun=) or enum members (IDLE vs Idle) — the answer is read straight
+# from the Script source, which never lags the code.
+# ---------------------------------------------------------------------------
+
+_ENUM_BASES = {"IntEnum", "IntFlag", "Enum", "Flag", "StrEnum"}
+
+
+def render_sig(name: str, spec: "SigSpec") -> str:
+    """Readable real signature, e.g. `set_flag(idn, index=..., selector=...)`."""
+    parts = [p if i < spec.num_pos_required else f"{p}=..."
+             for i, p in enumerate(spec.pos_params)]
+    for k in sorted(spec.params - set(spec.pos_params)):     # keyword-only params
+        parts.append(k if k in spec.required_kwonly else f"{k}=...")
+    if spec.has_varargs:
+        parts.append("*args")
+    if spec.has_kwargs:
+        parts.append("**kwargs")
+    return f"{name}({', '.join(parts)})"
+
+
+def _build_enum_index(root: Path) -> dict:
+    """{EnumClassName: {member names}} for every IntEnum/Enum/... under api/."""
+    enums: dict = {}
+    base = root / "api"
+    if not base.is_dir():
+        return enums
+    for py in base.rglob("*.py"):
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", SyntaxWarning)
+                tree = ast.parse(py.read_text(encoding="utf-8", errors="ignore"))
+        except (OSError, SyntaxError):
+            continue
+        for node in tree.body:
+            if not (isinstance(node, ast.ClassDef) and any(
+                    isinstance(b, ast.Name) and b.id in _ENUM_BASES for b in node.bases)):
+                continue
+            members: set = set()
+            for item in node.body:
+                if isinstance(item, ast.Assign):
+                    members |= {t.id for t in item.targets if isinstance(t, ast.Name)}
+                elif isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name):
+                    members.add(item.target.id)
+            if members:
+                enums.setdefault(node.name, set()).update(members)
+    return enums
+
+
+# ---------------------------------------------------------------------------
 # Public: build the index
 # ---------------------------------------------------------------------------
 
 def build_script_index(script_root) -> dict | None:
-    """Build {alias: Namespace} for api / ExecuteCMD / lib.
+    """Build {alias: Namespace} for api / ExecuteCMD / lib, plus `_enums`.
 
     Returns None if `script_root` does not look like a Script library root."""
     root = Path(script_root)
@@ -233,6 +285,7 @@ def build_script_index(script_root) -> dict | None:
             symbols=_module_exports(lib_file, cache, set()),
             all_names=_walk_all_names(root / "lib"),
         )
+    index["_enums"] = _build_enum_index(root)   # not a namespace alias; see check_api_calls
     return index
 
 
@@ -277,6 +330,7 @@ def check_api_calls(py_source: str, index: dict) -> list:
         spec = ns.symbols[name]
         if spec.kind == "name":
             continue       # not a func/class we can signature-check
+        realsig = f"  [real signature: {render_sig(name, spec)}]"   # the correct form
 
         # keyword arguments must be known (unless **kwargs)
         if not spec.has_kwargs:
@@ -286,7 +340,7 @@ def check_api_calls(py_source: str, index: dict) -> list:
                 if kw.arg not in spec.params:
                     issues.append({
                         "alias": alias, "symbol": name, "kind": "unknown_kwarg",
-                        "detail": f"{alias}.{name}() has no parameter '{kw.arg}'",
+                        "detail": f"{alias}.{name}() has no parameter '{kw.arg}'" + realsig,
                         "line": node.lineno,
                     })
 
@@ -298,7 +352,7 @@ def check_api_calls(py_source: str, index: dict) -> list:
                 issues.append({
                     "alias": alias, "symbol": name, "kind": "too_many_positional",
                     "detail": (f"{alias}.{name}() takes at most {spec.max_positional} "
-                               f"positional args, got {n_pos}"),
+                               f"positional args, got {n_pos}" + realsig),
                     "line": node.lineno,
                 })
 
@@ -316,9 +370,41 @@ def check_api_calls(py_source: str, index: dict) -> list:
                 issues.append({
                     "alias": alias, "symbol": name, "kind": "missing_required_arg",
                     "detail": (f"{alias}.{name}() missing required argument(s): "
-                               f"{', '.join(missing)}"),
+                               f"{', '.join(missing)}" + realsig),
                     "line": node.lineno,
                 })
+
+    issues += _check_enum_usage(tree, index.get("_enums", {}))
+    return issues
+
+
+def _check_enum_usage(tree: ast.AST, enums: dict) -> list:
+    """Flag `<Enum>.<MEMBER>` where MEMBER is not a real member of that enum —
+    catches IDLE vs Idle, IN_PROGRESS vs In_Progress, wrong enum class. Lists the
+    valid members so the fix is copy-paste."""
+    if not enums:
+        return []
+    issues: list = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Attribute):
+            continue
+        member = node.attr
+        if member in ("value", "name") or member.startswith("__"):
+            continue                       # enum builtins / dunders, not members
+        v = node.value
+        enum_name = v.attr if isinstance(v, ast.Attribute) else (
+            v.id if isinstance(v, ast.Name) else None)
+        if enum_name not in enums or member in enums[enum_name]:
+            continue
+        valid = sorted(enums[enum_name])
+        detail = (f"{enum_name} has no member '{member}'  "
+                  f"[valid: {', '.join(valid[:12])}{' …' if len(valid) > 12 else ''}]")
+        issue = {"alias": enum_name, "symbol": member, "kind": "unknown_enum_member",
+                 "detail": detail, "line": node.lineno}
+        near = difflib.get_close_matches(member, valid, n=1, cutoff=0.6)
+        if near:
+            issue["suggestion"] = near[0]
+        issues.append(issue)
     return issues
 
 

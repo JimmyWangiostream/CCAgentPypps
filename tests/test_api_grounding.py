@@ -20,6 +20,8 @@ def _mini_script(root: Path) -> Path:
     (api / "ufs_api" / "__init__.py").write_text(
         "from .rw import *\n", encoding="utf-8")
     (api / "ufs_api" / "rw.py").write_text(
+        "from enum import IntEnum\n"
+        "class Status(IntEnum):\n    OK = 0\n    FAIL = 1\n"
         "def sequential_write(lun, start_lba, total_size, chunk_size, fua):\n"
         "    pass\n"
         "def random_read(cmd_count, min_lun, max_lun, need_compare, write_record):\n"
@@ -46,7 +48,8 @@ def _mini_script(root: Path) -> Path:
 class TestBuildIndex:
     def test_resolves_aliases_and_symbols(self, tmp_path):
         idx = build_script_index(_mini_script(tmp_path / "Script"))
-        assert set(idx) == {"api", "ExecuteCMD", "lib"}
+        assert {"api", "ExecuteCMD", "lib"} <= set(idx)
+        assert "_enums" in idx                       # deterministic enum whitelist
         assert "random_read" in idx["api"].symbols
         assert "sequential_write" in idx["api"].symbols
         assert "send" in idx["ExecuteCMD"].symbols
@@ -103,9 +106,11 @@ class TestCheckApiCalls:
         issues = check_api_calls(src, self._idx(tmp_path))
         miss = [i for i in issues if i["kind"] == "missing_required_arg"]
         assert miss
-        assert "max_lun" in miss[0]["detail"]
-        assert "write_record" in miss[0]["detail"]
-        assert "min_lun" not in miss[0]["detail"]   # supplied -> not reported
+        # check the missing-list portion (the detail now also appends the real signature)
+        missing_part = miss[0]["detail"].split("[real signature")[0]
+        assert "max_lun" in missing_part
+        assert "write_record" in missing_part
+        assert "min_lun" not in missing_part        # supplied -> not in the missing list
 
     def test_required_args_satisfied_positionally(self, tmp_path):
         src = "def f(self):\n    api.random_read(1, 0, 0, True, None)\n"
@@ -122,6 +127,29 @@ class TestCheckApiCalls:
         src = "def f(self):\n    api.get_config_descriptors()\n"
         issues = check_api_calls(src, self._idx(tmp_path))
         assert issues == []
+
+    def test_enum_member_whitelisted(self, tmp_path):
+        idx = self._idx(tmp_path)
+        assert idx["_enums"].get("Status") == {"OK", "FAIL"}
+
+    def test_unknown_enum_member_flagged_with_valid_list(self, tmp_path):
+        src = "def f(self):\n    x = api.Status.NOPE\n"
+        issues = check_api_calls(src, self._idx(tmp_path))
+        miss = [i for i in issues if i["kind"] == "unknown_enum_member"]
+        assert miss
+        assert "OK" in miss[0]["detail"] and "FAIL" in miss[0]["detail"]   # valid members listed
+
+    def test_valid_enum_member_passes(self, tmp_path):
+        src = "def f(self):\n    x = api.Status.OK\n    y = api.Status.OK.value\n"
+        issues = check_api_calls(src, self._idx(tmp_path))
+        assert not [i for i in issues if i["kind"] == "unknown_enum_member"]
+
+    def test_finding_carries_real_signature(self, tmp_path):
+        # bad kwarg -> the detail must include the real signature (copy-paste fix)
+        src = "def f(self):\n    api.random_read(badkw=1)\n"
+        issues = check_api_calls(src, self._idx(tmp_path))
+        det = " ".join(i["detail"] for i in issues)
+        assert "real signature: random_read(" in det
 
     def test_kwargs_func_accepts_any_kwarg(self, tmp_path):
         src = "def f(self):\n    api.flexible(a=1, anything=2, more=3)\n"
