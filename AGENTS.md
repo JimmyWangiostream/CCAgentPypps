@@ -95,12 +95,28 @@ Generate a UFS test pattern for TC/<file>.md. Run, in order:
 - `rules` — print the prescriptive rule pack (the pitfall checklist).
 - `prepare-wholefile` — Stage-3 alternative: one whole-file authoring prompt
   (idiom anchors + rule pack + data-flow contract) instead of per-unit fragments.
+- `build-defaults` — merge `wiki/UserPrompt` + `wiki/ModelDefault` (+ `conflicts.md`) →
+  `wiki/default.md`: the resolved "what to do when the TC is silent" policy
+  (UserPrompt > ModelDefault + CustomerReq constraints). Regenerate after editing those.
 
-### Where to see fail points / pitfalls
+### Project defaults (what to do when the TC omits a detail)
+`wiki/default.md` is split by trigger and injected automatically — you do NOT retrieve it:
+- **Overrides (§1-§3: UserPrompt LUN rule, CustomerReq constraints)** are ALWAYS injected
+  into every unit/wholefile prompt (they fire on *absence* of info — e.g. "TC didn't say
+  which LUN", which has no keyword to retrieve on). So: don't hardcode `lun=0` — use the
+  MaxCapacity-Enabled-LUN rule when the TC is silent.
+- **ModelDefault base (§4)** is retrieved per step (top-1 topic) to save tokens.
+- The model only APPLIES a default when the TC is silent; if the TC specifies it, follow
+  the TC. Tag any default you use as `# src[wiki]: default.md`.
+
+### Where to see fail points / pitfalls / provenance
 - **Fail points (per run + history):** `gate_logs/<pattern_id>.gate_log.md` —
   append-only, timestamped, every `validate`/`finish` run's findings. The same folder
   holds the transient `<id>_repair_prompt.txt` / `_review_prompt.txt` / `_gate_state.json`.
 - **Pitfall checklist (the rules):** `python generate_pattern.py rules`, source in
   `pattern_generator/rules.py`.
+- **Defaults provenance:** `<run>/defaults_debug.md` (deterministic — which default
+  overrides + ModelDefault topic were OFFERED to each unit) + `retrieval_debug.md` (which
+  embeds it, alongside the model's self-reported `# src[wiki]` usage).
 
 See `CLAUDE.md` for command syntax and Step rules.
