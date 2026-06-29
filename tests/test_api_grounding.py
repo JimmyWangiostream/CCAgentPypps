@@ -4,7 +4,7 @@ Uses a tiny synthetic Script/ tree (no dependency on the real GitNexusMCP index)
 from pathlib import Path
 
 from pattern_generator.api_grounding import (
-    build_script_index, check_api_calls, format_issues,
+    build_script_index, check_api_calls, format_issues, api_facts,
 )
 
 
@@ -22,6 +22,8 @@ def _mini_script(root: Path) -> Path:
     (api / "ufs_api" / "rw.py").write_text(
         "from enum import IntEnum\n"
         "class Status(IntEnum):\n    OK = 0\n    FAIL = 1\n"
+        "class FlagIDN(IntEnum):\n    WRITEBOOSTER_EN = 0x0E\n    DEVICE_INIT = 0x04\n"
+        "def set_flag(idn, index=0, selector=0):\n    pass\n"
         "def sequential_write(lun, start_lba, total_size, chunk_size, fua):\n"
         "    pass\n"
         "def random_read(cmd_count, min_lun, max_lun, need_compare, write_record):\n"
@@ -168,3 +170,31 @@ class TestCheckApiCalls:
         src = "def f(self):\n    api.get_config_descriptor()\n"
         lines = format_issues(check_api_calls(src, self._idx(tmp_path)))
         assert lines and "did you mean 'get_config_descriptors'" in lines[0]
+
+
+class TestApiFacts:
+    """Phase B: inject exact signatures + relevant enum members AT generation time."""
+
+    def _root(self, tmp_path):
+        return _mini_script(tmp_path / "Script")
+
+    def test_exact_signature_injected(self, tmp_path):
+        facts = api_facts(self._root(tmp_path), ("set_flag",), "set flag")
+        assert "api.set_flag(idn, index=..., selector=...)" in "\n".join(facts)
+
+    def test_relevant_enum_members_listed(self, tmp_path):
+        facts = api_facts(self._root(tmp_path), ("set_flag",), "set flag writebooster en")
+        joined = "\n".join(facts)
+        assert "FlagIDN valid members:" in joined
+        assert "WRITEBOOSTER_EN" in joined and "DEVICE_INIT" in joined
+
+    def test_generic_enum_not_selected_on_generic_token(self, tmp_path):
+        # the 'Status' enum shares only the generic token 'status' -> must NOT inject
+        facts = api_facts(self._root(tmp_path), (), "check status")
+        assert not any("Status valid members" in f for f in facts)
+
+    def test_unrelated_query_yields_nothing(self, tmp_path):
+        assert api_facts(self._root(tmp_path), (), "zzz totally unrelated") == []
+
+    def test_missing_root_returns_empty(self, tmp_path):
+        assert api_facts(tmp_path / "nope", ("set_flag",), "set flag") == []

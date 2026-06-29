@@ -504,6 +504,7 @@ def build_one_unit_prompt(
     wiki_has_match: bool = True,
     grounding_mode: str = "gitnexus",
     code_candidates: list | None = None,
+    api_facts: list | None = None,
     defaults: str = "",
 ) -> str:
     """Build the LLM generation prompt for a single unit (one step, or one loop).
@@ -607,6 +608,18 @@ def build_one_unit_prompt(
             "## Wiki references: NO MATCH\n"
             "No relevant wiki page for this unit. You MUST emit TODO-REVIEW-NO-WIKI in "
             "=== REVIEW FLAGS === (or TODO-REVIEW-BOTH-MISS if the code source also returns nothing)."
+        )
+
+    # Deterministic API facts (Phase B): exact signatures + valid enum members read
+    # straight from the Script AST index — the SAME index the validator checks against.
+    # Authoritative: the model copies these instead of guessing param names / enum case.
+    # Additive — wiki (above) and gitnexus/code-candidate discovery (below) still apply.
+    if api_facts:
+        parts.append(
+            "## Exact API facts (AUTHORITATIVE — copy these param names / enum members "
+            "verbatim; do NOT guess. If a symbol you need is absent, confirm it via "
+            "gitnexus/Script source — never invent a signature or enum)\n"
+            + "\n".join(f"- {f}" for f in api_facts)
         )
 
     # Direct-Script grounding: inject the top-N candidate symbols (retrieved from the

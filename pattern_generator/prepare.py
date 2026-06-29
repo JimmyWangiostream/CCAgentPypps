@@ -105,6 +105,25 @@ def _unit_code(unit: dict, script_root, k: int = 3) -> list:
     return [r.render() for r in retrieve_code(query, script_root, k=k)]
 
 
+def _unit_api_facts(unit: dict, script_root, k: int = 5) -> list:
+    """Phase B: deterministic exact-signature + enum facts for this unit (both modes).
+
+    Resolve the unit's likely symbols (same code index as _unit_code) and look up
+    their EXACT signatures + relevant enum members from the api_grounding AST index
+    — the same index the validator checks against. Injected so the model copies the
+    real form instead of guessing. Empty if script_root isn't a Script library."""
+    from pattern_generator.api_grounding import api_facts
+    from code_retrieval.retrieve import retrieve_code
+    query = _unit_query(unit).strip()
+    if not query:
+        return []
+    try:
+        names = tuple(r.doc.name for r in retrieve_code(query, script_root, k=k))
+    except Exception:
+        names = ()
+    return api_facts(script_root, names, query)
+
+
 def _resolve_grounding_mode(run_dir: Path, config: PGConfig) -> str:
     """Grounding mode for a downstream unit: the run's persisted mode (written by
     prepare_pattern) wins, since prepare-unit is a separate CLI call. A non-default
@@ -193,6 +212,7 @@ def prepare_pattern(ir_path, config: PGConfig | None = None) -> dict:
         wiki = _unit_wiki(first_unit, config.wiki_path)
         code_candidates = (_unit_code(first_unit, config.script_root)
                            if config.grounding_mode == "direct" else None)
+        facts = _unit_api_facts(first_unit, config.script_root)
         defaults_text, md_stem = _unit_defaults(first_unit, config.wiki_path)
         prompt = build_one_unit_prompt(
             ir, first_unit,
@@ -200,6 +220,7 @@ def prepare_pattern(ir_path, config: PGConfig | None = None) -> dict:
             wiki_has_match=wiki["has_match"],
             grounding_mode=config.grounding_mode,
             code_candidates=code_candidates,
+            api_facts=facts,
             defaults=defaults_text,
         )
         first_prompt_file = _unit_prompt_filename(first_unit)
@@ -260,6 +281,7 @@ def prepare_unit(run_dir, unit_index: int, config: PGConfig | None = None) -> di
     mode = _resolve_grounding_mode(run_dir, cfg)
     wiki = _unit_wiki(unit, cfg.wiki_path)
     code_candidates = (_unit_code(unit, cfg.script_root) if mode == "direct" else None)
+    facts = _unit_api_facts(unit, cfg.script_root)
     defaults_text, md_stem = _unit_defaults(unit, cfg.wiki_path)
     prompt = build_one_unit_prompt(
         ir, unit,
@@ -270,6 +292,7 @@ def prepare_unit(run_dir, unit_index: int, config: PGConfig | None = None) -> di
         wiki_has_match=wiki["has_match"],
         grounding_mode=mode,
         code_candidates=code_candidates,
+        api_facts=facts,
         defaults=defaults_text,
     )
     fname = _unit_prompt_filename(unit)

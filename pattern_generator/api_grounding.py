@@ -26,6 +26,8 @@ from __future__ import annotations
 
 import ast
 import difflib
+import functools
+import re
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -131,7 +133,9 @@ def _module_exports(module_file: Path, cache: dict, visiting: set) -> dict:
     exports: dict = {}
     dunder_all: set | None = None
     try:
-        tree = ast.parse(module_file.read_text(encoding="utf-8", errors="ignore"))
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", SyntaxWarning)
+            tree = ast.parse(module_file.read_text(encoding="utf-8", errors="ignore"))
     except (OSError, SyntaxError):
         visiting.discard(key)
         cache[key] = {}
@@ -190,7 +194,9 @@ def _walk_all_names(package_dir: Path) -> set:
         return names
     for py in package_dir.rglob("*.py"):
         try:
-            tree = ast.parse(py.read_text(encoding="utf-8", errors="ignore"))
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", SyntaxWarning)
+                tree = ast.parse(py.read_text(encoding="utf-8", errors="ignore"))
         except (OSError, SyntaxError):
             continue
         for node in tree.body:
@@ -287,6 +293,76 @@ def build_script_index(script_root) -> dict | None:
         )
     index["_enums"] = _build_enum_index(root)   # not a namespace alias; see check_api_calls
     return index
+
+
+# ---------------------------------------------------------------------------
+# Public: inject deterministic facts AT GENERATION (Phase B — prevent guessing)
+#
+# The gate (check_api_calls) CATCHES guesses after the fact; this FEEDS the exact
+# form before the fact, from the SAME AST index, so the model copies `index=` /
+# `IDLE` instead of guessing. It is additive — wiki (flow meaning) and the model's
+# gitnexus/code-candidate discovery still run; this only nails the exact signature
+# + enum members for the symbols the unit is likely to use.
+# ---------------------------------------------------------------------------
+
+_TOKEN_SPLIT = re.compile(r"[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z0-9]+|[A-Z]+")
+# enum class-name tokens too generic to be a relevance signal on their own
+_GENERIC_ENUM_TOKENS = {"idn", "id", "type", "status", "mode", "state", "code", "value"}
+
+
+def _tokens(text: str) -> set:
+    return {m.group(0).lower() for m in _TOKEN_SPLIT.finditer(text or "")}
+
+
+@functools.lru_cache(maxsize=8)
+def _cached_index(script_root_str: str):
+    return build_script_index(script_root_str)
+
+
+def api_facts(script_root, symbol_names=(), query: str = "", max_enums: int = 8) -> list:
+    """Authoritative facts to inject into a unit prompt (possibly empty).
+
+    * exact signature for each candidate `symbol_names` found in api/ExecuteCMD/lib;
+    * valid members of every enum whose class-name shares a (non-generic) token with
+      the unit query or a candidate symbol — so the model copies the real member.
+
+    Deterministic, read straight from Script; cached per root. Returns [] if the
+    root is not a Script library (graceful — generation proceeds without it)."""
+    index = _cached_index(str(script_root))
+    if not index:
+        return []
+
+    facts: list = []
+    seen: set = set()
+    for alias in NAMESPACE_ALIASES:
+        ns = index.get(alias)
+        if not ns:
+            continue
+        for n in symbol_names:
+            if n in seen:
+                continue
+            spec = ns.symbols.get(n)
+            if spec and spec.kind in ("func", "class"):
+                # skip uninformative "(*args, **kwargs)" shells (class w/o __init__):
+                # no real param names to anchor on, and enum classes are covered below.
+                if spec.params or spec.pos_params:
+                    facts.append(f"{alias}.{render_sig(n, spec)}")
+                seen.add(n)
+
+    enums = index.get("_enums", {})
+    if enums:
+        qtok = _tokens(query)
+        for n in symbol_names:
+            qtok |= _tokens(n)
+        scored: list = []
+        for ename, members in enums.items():
+            overlap = (_tokens(ename) & qtok) - _GENERIC_ENUM_TOKENS
+            if overlap:
+                scored.append((len(overlap), ename, members))
+        scored.sort(key=lambda x: (-x[0], x[1]))
+        for _, ename, members in scored[:max_enums]:
+            facts.append(f"{ename} valid members: {', '.join(sorted(members))}")
+    return facts
 
 
 # ---------------------------------------------------------------------------

@@ -130,15 +130,20 @@ The review deliberately splits into two layers, each doing only what it is uniqu
   as markdown pitfall docs in `review_refs/`. **Adding a new rule = adding a `.md`** (no
   hand-coded check); the relevant docs are keyword-selected per pattern (cap 6) so the
   folder can grow without bloating any one prompt.
-- **Deterministic layer = AST api-facts** (`pattern_generator/api_grounding.py`, surfaced
-  by `validate`/`finish`). Exact param names, enum members, signatures — the one thing an
-  LLM reliably guesses wrong. The LLM review must NOT invent API; if unsure of a
-  signature/enum it reads real Script source, and the AST gate catches any residual guess.
+- **Deterministic layer = AST api-facts** (`pattern_generator/api_grounding.py`). Exact
+  param names, enum members, signatures — the one thing an LLM reliably guesses wrong. The
+  SAME index is used **twice**: it FEEDS at generation (Phase B — see below) and CATCHES at
+  the gate (`validate`/`finish`). The LLM review must NOT invent API; if unsure it reads
+  real Script source, and the AST gate catches any residual guess.
 
-### Generation grounding is top-3 (not top-5)
+### Generation grounding: top-3 + injected exact API facts (Phase B)
 Per-unit prompts inject **top-3** wiki essence + **top-3** code candidates (token-sensitive
-×N path). Correctness of API details comes from the deterministic api-facts above, not from
-piling on more candidate names.
+×N path) — AND, from the same AST index the gate uses, the **exact signatures + valid enum
+members** for the unit's likely symbols (`api_grounding.api_facts`, via `prepare._unit_api_facts`,
+both gitnexus and direct modes). So the model COPIES `read_attribute(idn, index=…, selector=…)`
+and `AttributeIDN` members verbatim instead of guessing `lun=` / wrong enum case. This is
+additive: wiki (flow meaning) and gitnexus/code-candidate discovery still run; the facts only
+nail the exact form. Correctness comes from these deterministic facts, not from more candidate names.
 - **Defaults provenance:** `<run>/defaults_debug.md` (deterministic — which default
   overrides + ModelDefault topic were OFFERED to each unit) + `retrieval_debug.md` (which
   embeds it, alongside the model's self-reported `# src[wiki]` usage).
