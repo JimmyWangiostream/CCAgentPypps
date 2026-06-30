@@ -2,7 +2,9 @@ import json
 from pathlib import Path
 import pytest
 from pattern_generator.config import PGConfig
-from pattern_generator.prepare import prepare_pattern, prepare_unit
+from pattern_generator.prepare import (
+    prepare_pattern, prepare_unit, _unit_query, _unit_code_query,
+)
 
 # IR with two phases connected by a dependency edge: phase_0 -> phase_1.
 # phase_1 is listed FIRST in the phases array so we can confirm topo order
@@ -106,6 +108,50 @@ def _cfg(tmp_path):
     return PGConfig(generated_dir=tmp_path / "generated")
 
 
+# ---------------------------------------------------------------------------
+# Code/api-fact retrieval query enrichment (FEED query fix — see diagnosis):
+# raw protocol tokens ("WRITE(10)", "POR") retrieve the wrong abstraction layer;
+# the unit's data-flow var names ("write_record_p1" -> "write record") bridge to
+# the high-level api idioms. Only the CODE-facing query is enriched; the wiki
+# query (_unit_query) is unchanged.
+# ---------------------------------------------------------------------------
+
+def test_unit_code_query_enriches_with_dataflow_vars():
+    unit = {
+        "steps": [{"scsi_cmd": "WRITE(10) (2Ah)", "ufs_query": None,
+                   "idn": None, "name": "random write"}],
+        "produces": ["write_record_p1"],
+        "consumes": [],
+        "set_vars": ["write_record_p1"],
+    }
+    base = _unit_query(unit)
+    enriched = _unit_code_query(unit)
+    # base (wiki) query has only protocol tokens, NOT the api-intent vocabulary
+    assert "write record" not in base.lower()
+    # enriched (code) query adds underscore-split var vocabulary
+    assert "write record" in enriched.lower()
+    # and still preserves the original protocol tokens
+    assert "WRITE(10)" in enriched
+
+
+def test_unit_code_query_dedupes_and_handles_empty_vars():
+    # produces & set_vars overlap -> token appears once; empty lists are fine.
+    unit = {
+        "steps": [{"scsi_cmd": None, "ufs_query": "SET FLAG (0x02)",
+                   "idn": None, "name": "enable wb"}],
+        "produces": ["wb_support_info"],
+        "consumes": [],
+        "set_vars": ["wb_support_info"],
+    }
+    q = _unit_code_query(unit).lower()
+    assert q.count("wb support info") == 1
+    # a unit with no data-flow vars degrades to exactly the base query
+    bare = {"steps": [{"scsi_cmd": None, "ufs_query": None, "idn": None,
+                       "name": "por reset"}], "produces": [], "consumes": [],
+            "set_vars": []}
+    assert _unit_code_query(bare) == _unit_query(bare)
+
+
 def test_prepare_writes_scaffold_units_and_first_prompt(tmp_path):
     """prepare_pattern writes scaffold.py, 1_units.json, and ONLY unit_01 prompt."""
     out = prepare_pattern(_write_ir(tmp_path), _cfg(tmp_path))
@@ -178,6 +224,35 @@ def _cfg_direct(tmp_path):
 
 _HAS_SCRIPT = (PGConfig().script_root / "api").is_dir()
 _skip_no_script = pytest.mark.skipif(not _HAS_SCRIPT, reason="GitNexusMCP/Script not present")
+
+
+def test_prepare_writes_ir_lint(tmp_path):
+    """Lever #4: prepare writes ir_lint.md (report-only protocol-path contradictions)."""
+    out = prepare_pattern(_write_ir(tmp_path), _cfg(tmp_path))
+    lint = Path(out["run_dir"]) / "ir_lint.md"
+    assert lint.exists()
+    # IR_WITH_DEPS has no WB-support step -> clean
+    assert "no contradictions" in lint.read_text(encoding="utf-8")
+
+
+def test_prepare_ir_lint_flags_wb_support_descriptor_path(tmp_path):
+    ir = {
+        "pattern_id": "PFWB_0001", "title": "wb", "description": "", "tags": [],
+        "phases": [{"phase_id": "phase_0", "name": "p", "type": "sequential",
+                    "loop_type": None, "loop_count": None, "inputs": [], "outputs": [],
+                    "steps": [{"step_id": "step_0_1", "name": "check Write Booster support",
+                               "scsi_cmd": None, "ufs_query": "READ DESCRIPTOR (0x07)",
+                               "opcode": None, "query_opcode": None,
+                               "idn": "0x00 (Device Descriptor)", "expected": "",
+                               "produces": [], "consumes": []}]}],
+        "dependency_graph": {"nodes": ["phase_0"], "edges": []},
+    }
+    ir_path = tmp_path / "pfwb-0001-ir.json"
+    ir_path.write_text(json.dumps(ir), encoding="utf-8")
+    out = prepare_pattern(ir_path, _cfg(tmp_path))
+    txt = (Path(out["run_dir"]) / "ir_lint.md").read_text(encoding="utf-8")
+    assert "ir_wrong_protocol_path" in txt
+    assert "dExtendedUFSFeaturesSupport" in txt
 
 
 def test_prepare_writes_defaults_debug(tmp_path):

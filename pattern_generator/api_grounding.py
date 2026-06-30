@@ -47,6 +47,7 @@ class SigSpec:
     pos_params: list = field(default_factory=list)   # ordered positional param names
     num_pos_required: int = 0       # leading positional params WITHOUT a default
     required_kwonly: set = field(default_factory=set)  # kw-only params without a default
+    returns: str = ""               # return-type stem (inner of Optional/List/Union), if annotated
 
 
 @dataclass
@@ -109,6 +110,27 @@ def _sig_from_args(args: ast.arguments, skip_self: bool) -> SigSpec:
     )
 
 
+def _return_type_stem(ann) -> str:
+    """Inner type name of a return annotation, unwrapping Optional/List/Union wrappers.
+
+    `List[ConfigDescriptorUnion]` -> 'ConfigDescriptorUnion'; `Optional[Foo]` -> 'Foo';
+    `mod.Bar` -> 'Bar'. '' when unannotated / not resolvable."""
+    if ann is None:
+        return ""
+    if isinstance(ann, ast.Name):
+        return ann.id
+    if isinstance(ann, ast.Attribute):
+        return ann.attr
+    if isinstance(ann, ast.Constant) and isinstance(ann.value, str):
+        return ann.value.split("[")[-1].split("]")[0].split(".")[-1].strip()
+    if isinstance(ann, ast.Subscript):
+        sl = ann.slice
+        if isinstance(sl, ast.Tuple) and sl.elts:
+            return _return_type_stem(sl.elts[-1])   # Union[A,B]/Dict[K,V] -> last
+        return _return_type_stem(sl)                # List[X]/Optional[X] -> X
+    return ""
+
+
 def _class_sig(node: ast.ClassDef) -> SigSpec:
     for item in node.body:
         if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name == "__init__":
@@ -143,7 +165,9 @@ def _module_exports(module_file: Path, cache: dict, visiting: set) -> dict:
 
     for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            exports[node.name] = _sig_from_args(node.args, skip_self=False)
+            spec = _sig_from_args(node.args, skip_self=False)
+            spec.returns = _return_type_stem(node.returns)
+            exports[node.name] = spec
         elif isinstance(node, ast.ClassDef):
             exports[node.name] = _class_sig(node)
         elif isinstance(node, ast.Assign):
@@ -228,6 +252,89 @@ def render_sig(name: str, spec: "SigSpec") -> str:
     return f"{name}({', '.join(parts)})"
 
 
+def _build_struct_fields(root: Path) -> dict:
+    """{ClassName: {field names}} for every class under api/.
+
+    Fields = `self.<x> =` assignments in any method (descriptor structs set them in
+    __init__/from_bytes) PLUS class-level `<x> =` assignments (bit accessors like
+    `u8_write_booster = CHK_BIT(...)`). The basis for verifying struct attribute access —
+    the gap api_grounding otherwise skips (attribute access needs this field table)."""
+    base = root / "api"
+    if not base.is_dir():
+        return {}
+    own: dict = {}      # class -> own fields (self.x=, class-level x=, @property)
+    bases: dict = {}    # class -> [base class names]
+    for py in base.rglob("*.py"):
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", SyntaxWarning)
+                tree = ast.parse(py.read_text(encoding="utf-8", errors="ignore"))
+        except (OSError, SyntaxError):
+            continue
+        for node in tree.body:
+            if not isinstance(node, ast.ClassDef):
+                continue
+            fields: set = set()
+            # self.<attr> = ... anywhere in the class
+            for sub in ast.walk(node):
+                if isinstance(sub, ast.Assign):
+                    for t in sub.targets:
+                        if (isinstance(t, ast.Attribute) and isinstance(t.value, ast.Name)
+                                and t.value.id == "self"):
+                            fields.add(t.attr)
+                elif isinstance(sub, ast.AnnAssign) and isinstance(sub.target, ast.Attribute):
+                    if isinstance(sub.target.value, ast.Name) and sub.target.value.id == "self":
+                        fields.add(sub.target.attr)
+            for item in node.body:
+                # class-level field / bit-accessor assignments
+                if isinstance(item, ast.Assign):
+                    fields |= {t.id for t in item.targets if isinstance(t, ast.Name)}
+                elif isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name):
+                    fields.add(item.target.id)
+                # @property (and cached_property) — attribute-like access, not a method call
+                elif isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    for dec in item.decorator_list:
+                        dname = dec.attr if isinstance(dec, ast.Attribute) else (
+                            dec.id if isinstance(dec, ast.Name) else "")
+                        if "property" in dname.lower():
+                            fields.add(item.name)
+            own.setdefault(node.name, set()).update(fields)
+            bases.setdefault(node.name, []).extend(
+                b.id for b in node.bases if isinstance(b, ast.Name))
+
+    # Merge inherited fields transitively (a field on a base is valid on the subclass).
+    def _collect(cls: str, seen: set) -> set:
+        if cls in seen:
+            return set()
+        seen.add(cls)
+        out = set(own.get(cls, ()))
+        for b in bases.get(cls, ()):
+            out |= _collect(b, seen)
+        return out
+
+    return {cls: _collect(cls, set()) for cls in own}
+
+
+def resolve_fields(index: dict, type_name: str) -> set:
+    """Field set for a return/struct type name. Exact class match, else merge classes that
+    share the type stem (e.g. `ExtendedWriteBoosterSupportUnion` -> `ExtendedWriteBoosterSupport*`),
+    else empty set."""
+    if not type_name:
+        return set()
+    structs = index.get("_structs", {})
+    if type_name in structs:
+        return set(structs[type_name])
+    stem = type_name
+    for suf in ("Union", "ABC"):
+        if stem.endswith(suf):
+            stem = stem[: -len(suf)]
+    merged: set = set()
+    for cname, fields in structs.items():
+        if cname == stem or cname.startswith(stem):
+            merged |= fields
+    return merged
+
+
 def _build_enum_index(root: Path) -> dict:
     """{EnumClassName: {member names}} for every IntEnum/Enum/... under api/."""
     enums: dict = {}
@@ -292,6 +399,10 @@ def build_script_index(script_root) -> dict | None:
             all_names=_walk_all_names(root / "lib"),
         )
     index["_enums"] = _build_enum_index(root)   # not a namespace alias; see check_api_calls
+    structs = _build_struct_fields(root)        # for struct-field FEED + CATCH
+    index["_structs"] = structs
+    index["_all_struct_fields"] = (
+        frozenset().union(*structs.values()) if structs else frozenset())
     return index
 
 
@@ -347,6 +458,14 @@ def api_facts(script_root, symbol_names=(), query: str = "", max_enums: int = 8)
                 # no real param names to anchor on, and enum classes are covered below.
                 if spec.params or spec.pos_params:
                     facts.append(f"{alias}.{render_sig(n, spec)}")
+                # struct fields of the return type, so the model copies the real field
+                # (e.g. l18_…/u0_…) instead of guessing (e.g. l85_…). Capped to stay concise.
+                if spec.returns:
+                    rf = sorted(resolve_fields(index, spec.returns))
+                    if rf:
+                        shown = ", ".join(rf[:30]) + (f", … (+{len(rf) - 30} more)"
+                                                      if len(rf) > 30 else "")
+                        facts.append(f"{spec.returns} fields (from {n}()): {shown}")
                 seen.add(n)
 
     enums = index.get("_enums", {})
@@ -481,6 +600,180 @@ def _check_enum_usage(tree: ast.AST, enums: dict) -> list:
         if near:
             issue["suggestion"] = near[0]
         issues.append(issue)
+    return issues
+
+
+# ---------------------------------------------------------------------------
+# Public: citation reality check (audit) — are the agent's `=== CODE REFS ===`
+# self-reported, so an agent can fabricate a symbol AND a "(gitnexus rank1)"
+# citation for it. The harmful case (a fake symbol USED in code) is caught by
+# check_api_calls; this catches the fabricated CITATION itself (audit integrity).
+# Conservative: flag only a citation whose symbol resolves NOWHERE in Script.
+# ---------------------------------------------------------------------------
+
+# `<path>.py:<symbol>` inside a code-ref line; symbol may be dotted (Class.method).
+_CITATION_RE = re.compile(r"([\w/\\.\-]+\.py)\s*:\s*([A-Za-z_][\w.]*)")
+
+
+@functools.lru_cache(maxsize=8)
+def _all_script_names(script_root_str: str) -> frozenset:
+    """Every IDENTIFIER that appears anywhere in Script source (def/class/method names,
+    variable names, and attribute names).
+
+    The whitelist for citation reality. It is deliberately broad — citations legitimately
+    point not just at functions/classes but at methods (`printout_config_desc_header`),
+    module vars (`param`), and struct/instance fields (`gLUCapacity`, `gMaxNumberLU`), none
+    of which a def/class-only set contains. Verifying those precisely needs type inference
+    (which api_grounding avoids), so the audit instead asks the strong, FP-free question:
+    does this cited token exist NOWHERE in the codebase? — which catches pure fabrications
+    like `random_read_and_compare` (0 occurrences) without crying wolf on real fields.
+    Empty frozenset if the root is absent."""
+    root = Path(script_root_str)
+    if not root.exists():
+        return frozenset()
+    names: set = set()
+    for py in root.rglob("*.py"):
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", SyntaxWarning)
+                tree = ast.parse(py.read_text(encoding="utf-8", errors="ignore"))
+        except (OSError, SyntaxError):
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                names.add(node.name)
+            elif isinstance(node, ast.Name):
+                names.add(node.id)
+            elif isinstance(node, ast.Attribute):
+                names.add(node.attr)
+    return frozenset(names)
+
+
+def check_citations(code_refs, script_root) -> list:
+    """Flag `=== CODE REFS ===` lines that cite a symbol existing NOWHERE in Script.
+
+    Reuses the AST view of Script (same source of truth as check_api_calls). Lines
+    with no `path.py:symbol` citation (prose like 'No API calls needed', `src[wiki]:`,
+    `NO MATCH`) are skipped. Conservative — a citation passes if ANY dotted component
+    of its symbol is a known Script name, so legit `Script/pattern/...:Pattern.step1`
+    is never flagged; pure fabrications (`random_read_and_compare`) are. Returns the
+    standard issue-dict shape (line 0 — citations are metadata, not source lines)."""
+    if not script_root:
+        return []
+    known = _all_script_names(str(script_root))
+    if not known:
+        return []
+    issues: list = []
+    for ref in code_refs or []:
+        m = _CITATION_RE.search(ref or "")
+        if not m:
+            continue
+        path, symbol = m.group(1), m.group(2)
+        components = symbol.split(".")
+        if any(c in known for c in components):
+            continue   # at least one component is a real Script symbol
+        issue = {"alias": "citation", "symbol": symbol, "kind": "citation_unknown_symbol",
+                 "detail": f"cited symbol '{symbol}' ({path}) does not exist in Script "
+                           f"(fabricated grounding citation)", "line": 0}
+        near = difflib.get_close_matches(components[-1], known, n=1, cutoff=0.7)
+        if near:
+            issue["suggestion"] = near[0]
+        issues.append(issue)
+    return issues
+
+
+def _ns_call_return(call: ast.Call, index: dict) -> str:
+    """Return-type stem of an `api.F()/ExecuteCMD.F()/lib.F()` call, else ''."""
+    f = call.func
+    if (isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name)
+            and f.value.id in NAMESPACE_ALIASES):
+        ns = index.get(f.value.id)
+        spec = ns.symbols.get(f.attr) if ns else None
+        return getattr(spec, "returns", "") if spec else ""
+    return ""
+
+
+def _is_struct_type(index: dict, rtype: str) -> bool:
+    return bool(rtype) and (bool(resolve_fields(index, rtype))
+                            or rtype.endswith(("Descriptor", "Support", "Header", "Union")))
+
+
+def check_struct_fields(py_source: str, index: dict) -> list:
+    """Flag `<x>.<attr>` where <x> is the result of a struct-returning api/lib call and <attr>
+    is a field of NO Script struct (a fabricated descriptor field — the gap check_api_calls
+    skips). Covers both `v = api.F(); v.attr` (var-origin, like semantic_checks) and the inline
+    `api.F().attr`.
+
+    Conservative / FP-safe: DIRECT single-hop only (skips `x[0].header.y` chains and `self.*`);
+    flags only attrs absent from the GLOBAL field set, so real fields (`u0_…`) and method calls
+    (`.append`) pass while blatant fabrications (`l85_…`) are caught."""
+    if not index:
+        return []
+    all_fields = index.get("_all_struct_fields") or frozenset()
+    if not all_fields:
+        return []
+    try:
+        tree = ast.parse(py_source)
+    except SyntaxError:
+        return []
+
+    issues: list = []
+    for fn in ast.walk(tree):
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        # vars assigned more than once are untrustworthy (could be reassigned to another
+        # type) -> exclude them, so we never flag a `.attr` on a since-reassigned var.
+        assigned: set = set()
+        multi: set = set()
+        for node in ast.walk(fn):
+            tgts: list = []
+            if isinstance(node, ast.Assign):
+                tgts = [t for t in node.targets if isinstance(t, ast.Name)]
+            elif isinstance(node, (ast.AnnAssign, ast.AugAssign)) and isinstance(
+                    getattr(node, "target", None), ast.Name):
+                tgts = [node.target]
+            for t in tgts:
+                (multi if t.id in assigned else assigned).add(t.id)
+
+        # var -> (rtype, fields) for a SINGLE-assignment `var = api.F(...)` returning a struct
+        origin: dict = {}
+        for node in ast.walk(fn):
+            if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                    and isinstance(node.targets[0], ast.Name)
+                    and node.targets[0].id not in multi
+                    and isinstance(node.value, ast.Call)):
+                rtype = _ns_call_return(node.value, index)
+                if _is_struct_type(index, rtype):
+                    origin[node.targets[0].id] = (rtype, resolve_fields(index, rtype))
+
+        for node in ast.walk(fn):
+            if not (isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Load)):
+                continue
+            attr = node.attr
+            if attr.startswith("__") or attr in ("value", "name"):
+                continue
+            v = node.value
+            if isinstance(v, ast.Name) and v.id in origin:        # var-origin: v.attr
+                rtype, fields = origin[v.id]
+            elif isinstance(v, ast.Call) and _is_struct_type(index, _ns_call_return(v, index)):
+                rtype = _ns_call_return(v, index)                  # inline: api.F().attr
+                fields = resolve_fields(index, rtype)
+            else:
+                continue
+            # PRECISE when the return struct resolved to a field set: flag attr not on THAT
+            # struct (catches right-field-wrong-struct, e.g. a DeviceDescriptor field read off
+            # the WriteBooster-support union). When unresolved, fall back to the GLOBAL set
+            # (only blatant fabrications). Either way real fields / methods pass.
+            valid = fields if fields else all_fields
+            if attr in valid:
+                continue
+            where = f"a field of {rtype}" if fields else "any Script struct field"
+            issue = {"alias": "struct", "symbol": attr, "kind": "unknown_struct_field",
+                     "detail": f"'.{attr}' is not {where}", "line": node.lineno}
+            near = difflib.get_close_matches(attr, sorted(fields or all_fields), n=1, cutoff=0.7)
+            if near:
+                issue["suggestion"] = near[0]
+            issues.append(issue)
     return issues
 
 

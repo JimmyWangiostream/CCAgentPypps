@@ -45,6 +45,27 @@ def _unit_query(unit: dict) -> str:
     return " ".join(terms)
 
 
+def _unit_code_query(unit: dict) -> str:
+    """Query for CODE / api-fact retrieval — the base query PLUS the unit's data-flow
+    variable names (produces/consumes/set_vars), underscore-split into intent words.
+
+    Protocol tokens alone ('WRITE(10)', 'POR') retrieve the WRONG abstraction layer
+    (low-level CDB classes / power_on), because they are not the framework's API
+    vocabulary. The data-flow var names bridge the gap: 'write_record_p1' -> 'write
+    record' surfaces get_empty_write_record/random_write; 'wb_support_info' -> 'wb
+    support' surfaces get_extended_ufs_features_support (and triggers the WB-support
+    canonical_facts idiom, whose English trigger the Chinese step name misses). This
+    is the FEED-only fix; the wiki query (_unit_query) is intentionally left alone.
+    """
+    base = _unit_query(unit)
+    var_tokens: list = []
+    for key in ("produces", "consumes", "set_vars"):
+        for v in unit.get(key, []) or []:
+            var_tokens.append(str(v).replace("_", " "))
+    extra = " ".join(dict.fromkeys(var_tokens))  # dedupe, preserve order
+    return (base + (" " + extra if extra else "")).strip()
+
+
 def _unit_wiki(unit: dict, wiki_path) -> dict:
     """Retrieve the wiki essence + top-5 for a unit (deterministic injection)."""
     query = _unit_query(unit).strip()
@@ -99,7 +120,7 @@ def _unit_code(unit: dict, script_root, k: int = 3) -> list:
     code_retrieval index (no gitnexus) for real symbols to inject as candidates.
     """
     from code_retrieval.retrieve import retrieve_code
-    query = _unit_query(unit).strip()
+    query = _unit_code_query(unit).strip()
     if not query:
         return []
     return [r.render() for r in retrieve_code(query, script_root, k=k)]
@@ -111,10 +132,14 @@ def _unit_api_facts(unit: dict, script_root, k: int = 5) -> list:
     Resolve the unit's likely symbols (same code index as _unit_code) and look up
     their EXACT signatures + relevant enum members from the api_grounding AST index
     — the same index the validator checks against. Injected so the model copies the
-    real form instead of guessing. Empty if script_root isn't a Script library."""
+    real form instead of guessing. Empty if script_root isn't a Script library.
+
+    NOTE: these are HEURISTIC (code_retrieval may surface sibling/wrong-layer symbols)
+    so they ride the mode-aware authority block. The canonical idioms (always
+    authoritative) are returned SEPARATELY by `_unit_canonical` — do not merge."""
     from pattern_generator.api_grounding import api_facts
     from code_retrieval.retrieve import retrieve_code
-    query = _unit_query(unit).strip()
+    query = _unit_code_query(unit).strip()
     if not query:
         return []
     try:
@@ -122,6 +147,17 @@ def _unit_api_facts(unit: dict, script_root, k: int = 5) -> list:
     except Exception:
         names = ()
     return api_facts(script_root, names, query)
+
+
+def _unit_canonical(unit: dict) -> list:
+    """Canonical-idiom imperative facts for this unit (semantic_checks.canonical_facts).
+
+    The PREVENT half of ENFORCED gate rules → AUTHORITATIVE, kept separate from the
+    heuristic api_facts so the mode-aware demotion (gitnexus cross-check) never weakens
+    an enforced idiom. Triggered off the enriched code query (so the var-name vocabulary,
+    e.g. 'wb support', fires the rule even when the step name is Chinese)."""
+    from pattern_generator.semantic_checks import canonical_facts
+    return canonical_facts(_unit_code_query(unit))
 
 
 def _resolve_grounding_mode(run_dir: Path, config: PGConfig) -> str:
@@ -165,6 +201,24 @@ def _gather_upstream(run_dir: Path, target_index: int) -> tuple[str, list, list]
     return "\n\n".join(methods_blocks), code_refs, helpers
 
 
+def _write_ir_lint(run, ir: dict) -> list:
+    """Lever #4: deterministically flag IR steps whose protocol path contradicts a
+    canonical idiom (report-only) -> <run>/ir_lint.md. Generation-prompt canonical
+    blocks then OVERRIDE the contradiction; this surfaces the root cause to a human."""
+    from pattern_generator.semantic_checks import check_ir_protocol_paths
+    findings = check_ir_protocol_paths(ir)
+    lines = ["# IR protocol-path lint (canonical-idiom contradictions — report-only)\n"]
+    if findings:
+        lines.append("> The generation prompt's canonical-idiom block OVERRIDES these; "
+                     "fix the IR/TC upstream to remove the contradiction.\n")
+        for f in findings:
+            lines.append(f"- [{f['kind']}] {f['detail']}  (suggest: {f.get('suggestion','')})")
+    else:
+        lines.append("- (no contradictions)")
+    run.write_text("ir_lint.md", "\n".join(lines) + "\n")
+    return findings
+
+
 def prepare_pattern(ir_path, config: PGConfig | None = None) -> dict:
     """Step 4: write scaffold.py + 1_units.json + the FIRST unit prompt.
 
@@ -181,6 +235,7 @@ def prepare_pattern(ir_path, config: PGConfig | None = None) -> dict:
     run = RunDir(config.generated_dir, pattern_id)
     run.write_json("1_units.json", units)
     run.write_text("scaffold.py", scaffold)
+    _write_ir_lint(run, ir)
 
     # Persist the grounding mode so downstream prepare-unit calls (separate CLI
     # invocations) reuse it without re-passing --grounding. Gitnexus runs (default)
@@ -213,6 +268,7 @@ def prepare_pattern(ir_path, config: PGConfig | None = None) -> dict:
         code_candidates = (_unit_code(first_unit, config.script_root)
                            if config.grounding_mode == "direct" else None)
         facts = _unit_api_facts(first_unit, config.script_root)
+        canonical = _unit_canonical(first_unit)
         defaults_text, md_stem = _unit_defaults(first_unit, config.wiki_path)
         prompt = build_one_unit_prompt(
             ir, first_unit,
@@ -221,6 +277,7 @@ def prepare_pattern(ir_path, config: PGConfig | None = None) -> dict:
             grounding_mode=config.grounding_mode,
             code_candidates=code_candidates,
             api_facts=facts,
+            canonical_facts=canonical,
             defaults=defaults_text,
         )
         first_prompt_file = _unit_prompt_filename(first_unit)
@@ -278,10 +335,34 @@ def prepare_unit(run_dir, unit_index: int, config: PGConfig | None = None) -> di
 
     methods_text, code_refs, helpers = _gather_upstream(run_dir, unit_index)
     cfg = config or PGConfig()
+
+    # Per-unit micro-gate: run the SAME deterministic checks the final gate runs, but on
+    # the immediately-upstream unit, and surface any failures at the top of THIS prompt —
+    # so a unit's bug is fixed where it was made (self-heals even if the workflow forgot
+    # to run `validate-unit`). See pattern_generator.unit_gate.
+    upstream_gate = ""
+    if unit_index > 1:
+        prev = units[unit_index - 2]
+        prev_mf = run_dir / _unit_methods_filename(prev)
+        if prev.get("kind") != "loop_wrapper" and prev_mf.is_file():
+            from pattern_generator.assemble import _parse_unit_methods
+            from pattern_generator.unit_gate import check_unit, unit_findings
+            pu = _parse_unit_methods(prev_mf.read_text(encoding="utf-8", errors="ignore"))
+            findings = unit_findings(check_unit(pu.methods, code_refs=pu.code_refs,
+                                                script_root=cfg.script_root))
+            if findings:
+                upstream_gate = (
+                    f"## FIX UPSTREAM UNIT FIRST — {prev_mf.name} failed the per-unit gate\n"
+                    "Correct that file (deterministic errors below) before generating this "
+                    "unit, which builds on it:\n"
+                    + "\n".join(f"- {f}" for f in findings) + "\n\n"
+                )
+
     mode = _resolve_grounding_mode(run_dir, cfg)
     wiki = _unit_wiki(unit, cfg.wiki_path)
     code_candidates = (_unit_code(unit, cfg.script_root) if mode == "direct" else None)
     facts = _unit_api_facts(unit, cfg.script_root)
+    canonical = _unit_canonical(unit)
     defaults_text, md_stem = _unit_defaults(unit, cfg.wiki_path)
     prompt = build_one_unit_prompt(
         ir, unit,
@@ -293,10 +374,11 @@ def prepare_unit(run_dir, unit_index: int, config: PGConfig | None = None) -> di
         grounding_mode=mode,
         code_candidates=code_candidates,
         api_facts=facts,
+        canonical_facts=canonical,
         defaults=defaults_text,
     )
     fname = _unit_prompt_filename(unit)
-    (run_dir / fname).write_text(prompt, encoding="utf-8")
+    (run_dir / fname).write_text(upstream_gate + prompt, encoding="utf-8")
     _record_defaults(run_dir, unit, md_stem)
 
     return {

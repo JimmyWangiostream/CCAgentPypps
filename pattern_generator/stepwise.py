@@ -385,6 +385,22 @@ GROUNDING (MANDATORY before writing any API call):
            - Do NOT call any symbol you have not confirmed exists via gitnexus
              `context`. If you cannot confirm it, do not guess — emit
              TODO-REVIEW-NO-CODE-REF and tag the call # TODO human-confirm.
+
+           IDIOM & SELECTION (which sibling is RIGHT — anti-conflation finds param
+           confusion; this finds the wrong-API-chosen trap, e.g. WriteBooster support):
+           - gitnexus `query` returns more than candidate NAMES — it returns PROCESSES
+             (real call chains) and `Script/pattern/sample_code/` + real `Script/pattern/`
+             files. USE THEM. When 2+ siblings look plausible (e.g. get_device_descriptor
+             vs get_extended_ufs_features_support vs get_extended_write_booster_support),
+             do NOT pick by name similarity or by rank1. READ a real caller / sample_code
+             that performs THIS operation and copy the idiom it uses.
+           - The protocol PATH is the test: a feature *support* check reads
+             `get_extended_ufs_features_support().u8_write_booster` (READ ATTRIBUTE
+             dExtendedUFSFeaturesSupport) — NOT a Device Descriptor buffer-type field and
+             NOT the FFU bit. Confirm which field/struct the real idiom reads, not just that
+             a similarly-named getter exists.
+           - Prefer copying a worked idiom from `Script/pattern/sample_code/` or a real
+             `Script/pattern/` caller over assembling a call from a bare signature.
   WIKI  → Use ONLY the injected "Wiki references" block below (RRF top-5 + essence);
            do not free-read the wiki. Conflict overrides shown there WIN
            (Rule 1 CustomerReq>Spec, Rule 2 UserPrompt>ModelDefault — two independent
@@ -505,6 +521,7 @@ def build_one_unit_prompt(
     grounding_mode: str = "gitnexus",
     code_candidates: list | None = None,
     api_facts: list | None = None,
+    canonical_facts: list | None = None,
     defaults: str = "",
 ) -> str:
     """Build the LLM generation prompt for a single unit (one step, or one loop).
@@ -614,13 +631,39 @@ def build_one_unit_prompt(
     # straight from the Script AST index — the SAME index the validator checks against.
     # Authoritative: the model copies these instead of guessing param names / enum case.
     # Additive — wiki (above) and gitnexus/code-candidate discovery (below) still apply.
-    if api_facts:
+    # Canonical idioms (semantic_checks.CANONICAL_IDIOMS) — the PREVENT half of an
+    # ENFORCED gate rule, so AUTHORITATIVE in BOTH modes (NOT demoted like the heuristic
+    # api_facts below). They also OVERRIDE any contradicting protocol path / field named
+    # in the step JSON above (the upstream-IR trap, e.g. a WB-support step that says
+    # "READ DESCRIPTOR Device Descriptor").
+    if canonical_facts:
         parts.append(
-            "## Exact API facts (AUTHORITATIVE — copy these param names / enum members "
-            "verbatim; do NOT guess. If a symbol you need is absent, confirm it via "
-            "gitnexus/Script source — never invent a signature or enum)\n"
-            + "\n".join(f"- {f}" for f in api_facts)
-        )
+            "## Canonical idioms (AUTHORITATIVE — enforced by the gate; these OVERRIDE "
+            "any contradicting protocol path / field named in the step above. Follow them "
+            "exactly)\n" + "\n".join(f"- {f}" for f in canonical_facts))
+
+    if api_facts:
+        if direct:
+            # Direct mode: code_retrieval IS the only code-grounding source, so these
+            # facts are authoritative (confirm by reading Script source).
+            facts_header = (
+                "## Exact API facts (AUTHORITATIVE — copy these param names / enum members "
+                "verbatim; do NOT guess. If a symbol you need is absent, confirm it via "
+                "gitnexus/Script source — never invent a signature or enum)")
+        else:
+            # gitnexus mode: these facts are resolved by the weaker code_retrieval proxy
+            # over a heuristic query, so they MAY name sibling or wrong-abstraction-layer
+            # symbols. The exact signature you confirm via gitnexus `context` on the symbol
+            # YOU picked is PRIMARY; use these only to cross-check enum spelling / required
+            # args, and on conflict TRUST your gitnexus `context` result (model-side
+            # FEED↔discovery alignment).
+            facts_header = (
+                "## Candidate API facts (CROSS-CHECK only — retrieved heuristically; may "
+                "name sibling or wrong-layer symbols). PRIMARY = the signature you confirm "
+                "via gitnexus `context` on the symbol YOU selected; if these conflict with "
+                "gitnexus `context`, trust gitnexus. Do NOT copy a fact for a symbol you "
+                "did not choose, and never invent a signature or enum)")
+        parts.append(facts_header + "\n" + "\n".join(f"- {f}" for f in api_facts))
 
     # Direct-Script grounding: inject the top-N candidate symbols (retrieved from the
     # Script library) so the model grounds on real symbols and confirms by reading source.

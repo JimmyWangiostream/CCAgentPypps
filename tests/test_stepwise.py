@@ -453,6 +453,59 @@ class TestBuildOneUnitPrompt:
         assert "Wiki references: NO MATCH" in no_wiki
         assert "TODO-REVIEW-NO-WIKI" in no_wiki
 
+    def test_api_facts_gitnexus_mode_demoted_to_crosscheck(self):
+        """In gitnexus mode the injected facts come from the weaker code_retrieval
+        proxy, so they are a CROSS-CHECK; the model's own gitnexus context() on the
+        symbol it picked is PRIMARY. The block must NOT claim authoritative-copy."""
+        ir, units = self._units()
+        prompt = build_one_unit_prompt(
+            ir, units[0], grounding_mode="gitnexus",
+            api_facts=["set_flag(idn, value) -> None"])
+        assert "set_flag(idn, value)" in prompt
+        # demoted wording present; authoritative-copy wording absent
+        assert "cross-check" in prompt.lower()
+        assert "gitnexus `context`" in prompt or "gitnexus context" in prompt
+        assert "AUTHORITATIVE — copy" not in prompt
+
+    def test_api_facts_direct_mode_stays_authoritative(self):
+        """Direct mode has no gitnexus; code_retrieval facts ARE the source, so they
+        remain authoritative (confirm by reading Script source)."""
+        ir, units = self._units()
+        prompt = build_one_unit_prompt(
+            ir, units[0], grounding_mode="direct",
+            api_facts=["set_flag(idn, value) -> None"])
+        assert "set_flag(idn, value)" in prompt
+        assert "AUTHORITATIVE" in prompt
+
+    def test_canonical_facts_stay_authoritative_in_gitnexus_mode(self):
+        """Lever #4 Part 2: canonical idioms are the PREVENT half of an ENFORCED rule,
+        so they ride their OWN authoritative block (with an OVERRIDE clause) and are NOT
+        demoted to the gitnexus 'cross-check' wording the heuristic api_facts get."""
+        ir, units = self._units()
+        prompt = build_one_unit_prompt(
+            ir, units[0], grounding_mode="gitnexus",
+            api_facts=["set_flag(idn, value) -> None"],
+            canonical_facts=["WriteBooster support MUST be read via "
+                             "api.get_extended_ufs_features_support().u8_write_booster"])
+        # canonical block present, authoritative, with the override clause
+        assert "Canonical idioms (AUTHORITATIVE" in prompt
+        assert "OVERRIDE" in prompt
+        assert "u8_write_booster" in prompt
+        # the heuristic api_facts block is still demoted (mode-aware) and distinct
+        assert "CROSS-CHECK" in prompt
+
+    def test_gitnexus_instructions_include_idiom_selection(self):
+        """Lever #3: gitnexus mode must tell the model to disambiguate sibling symbols
+        by reading a real caller / sample_code idiom (not by name similarity / rank1),
+        using the processes + sample files gitnexus query already returns."""
+        ir, units = self._units()
+        prompt = build_one_unit_prompt(ir, units[0], grounding_mode="gitnexus")
+        assert "IDIOM & SELECTION" in prompt
+        assert "sample_code" in prompt
+        assert "do NOT pick by name similarity" in prompt
+        # the WriteBooster-support trap is the canonical worked example
+        assert "get_extended_ufs_features_support" in prompt
+
     def test_extract_helper_signatures_skips_steps(self):
         methods = (
             "    def step1(self) -> None:\n        pass\n\n"

@@ -37,12 +37,21 @@ Deterministic Python CLI: prepare-ir / finalize-ir / prepare / prepare-unit /
 assemble / validate / review / finish. LLM steps (Step A, Step B, repairs) are
 performed by the agent. No external LLM API keys are used.
 
+**Loops:** `prepare-ir` auto-collapses a cross-phase loop written as a JIRA 對照表
+`| Loop | … | Loop（Phase 1 → Phase 2 → Phase 3）|` row into ONE `type:"loop"` phase, which
+becomes a single `stepN` loop-wrapper (+ one helper per sub-step) — so the burn-in `for` loop
+is materialized, not dropped. You just generate the helpers; the wrapper is auto-written.
+
 **Key design for agents: every LLM step's instructions are in a self-contained
 `.txt` prompt the CLI writes.** You don't need a meta-prompt — run the command,
 read the emitted prompt file, write the named output. The prompt files are:
 `enrich_prompt.txt` (Step A), `unit_NN_*_prompt.txt` (Step B per unit),
 `<id>_repair_prompt.txt` / `<id>_review_prompt.txt` (the `finish` gate loop),
 `wholefile_prompt.txt` (the Stage-3 whole-file alternative).
+
+### Packaged skill (discoverable entry point)
+A repo-local skill at `.claude/skills/generate-pattern/SKILL.md` packages this whole flow so
+any agent's skill mechanism can find + run it. It indexes back to this file and CLAUDE.md.
 
 ### Quick start — onboarding ANY agent (incl. non-Claude-Code)
 
@@ -80,6 +89,10 @@ Generate a UFS test pattern for TC/<file>.md. Run, in order:
 5. for k=1..N: python generate_pattern.py prepare-unit <run> k
                 read <run>/unit_kk_*_prompt.txt -> write unit_kk_*_methods.py
                 (loop-wrapper units report "skip" — do NOT hand-write them)
+                python generate_pattern.py validate-unit <run> k   # per-unit gate
+                GATE FAIL -> rewrite unit_kk_*_methods.py fixing every finding, re-run
+                             validate-unit until PASS, THEN move to k+1. Catches the
+                             bug at its source unit (cheaper than end-stage repair).
 6. python generate_pattern.py assemble <run> <PatternName>
 7. python generate_pattern.py finish <gen>/<PatternName>.py <run>/<id>-ir.json
       GATE FAIL -> read the printed <id>_repair_prompt.txt, rewrite the WHOLE .py
@@ -105,6 +118,15 @@ Generate a UFS test pattern for TC/<file>.md. Run, in order:
 - `build-defaults` — merge `wiki/UserPrompt` + `wiki/ModelDefault` (+ `conflicts.md`) →
   `wiki/default.md`: the resolved "what to do when the TC is silent" policy
   (UserPrompt > ModelDefault + CustomerReq constraints). Regenerate after editing those.
+- `python wiki_lint.py` — deterministic wiki health check (dangling `[[wikilinks]]`, missing
+  `type:`, orphans, stale `default.md`, conflicts→missing pages, unused source/code trees).
+  Run after editing the wiki; exit 1 on any error. Code-only grounding stays in gitnexus/Script
+  — NO code tree belongs under `wiki/` (the lint errors on one).
+- **VC (Verification Criteria, `wiki/VC/`, `wiki_retrieval/vc.py`)** — 361 per-pattern test
+  specs (criterion + checkpoints + expected results). Auto-used: a capped, BM25-gated VC band
+  is surfaced in unit-prompt wiki essence; `review`/`finish` injects matched VC docs (keyword +
+  exact `pattern_id`) as checkpoints the pattern must implement+assert. `wiki_index.py build`
+  embeds the `vc` layer for dense.
 
 ### Project defaults (what to do when the TC omits a detail)
 `wiki/default.md` is split by trigger and injected automatically — you do NOT retrieve it:
@@ -131,19 +153,34 @@ The review deliberately splits into two layers, each doing only what it is uniqu
   hand-coded check); the relevant docs are keyword-selected per pattern (cap 6) so the
   folder can grow without bloating any one prompt.
 - **Deterministic layer = AST api-facts** (`pattern_generator/api_grounding.py`). Exact
-  param names, enum members, signatures — the one thing an LLM reliably guesses wrong. The
-  SAME index is used **twice**: it FEEDS at generation (Phase B — see below) and CATCHES at
-  the gate (`validate`/`finish`). The LLM review must NOT invent API; if unsure it reads
-  real Script source, and the AST gate catches any residual guess.
+  param names, enum members, signatures, **and struct fields** (from each function's return
+  type) — the things an LLM reliably guesses wrong. The SAME index is used FOUR ways: it
+  FEEDS at generation (Phase B — signatures/enums/struct-fields) and CATCHES at the gate
+  (`validate`/`finish`) via (1) `check_api_calls` (symbol/kwarg/positional/required-arg/enum),
+  (3) `check_struct_fields` (a field not on the call's return struct, e.g. a `DeviceDescriptor`
+  field read off the WriteBooster-support union), and (4) `check_citations` (a `=== CODE REFS ===`
+  citation whose symbol exists nowhere — audit). The LLM review must NOT invent API; if unsure it
+  reads real Script source, and the AST gate catches any residual guess.
 
 ### Generation grounding: top-3 + injected exact API facts (Phase B)
 Per-unit prompts inject **top-3** wiki essence + **top-3** code candidates (token-sensitive
 ×N path) — AND, from the same AST index the gate uses, the **exact signatures + valid enum
-members** for the unit's likely symbols (`api_grounding.api_facts`, via `prepare._unit_api_facts`,
+members + struct fields (of return types)** for the unit's likely symbols (`api_grounding.api_facts`, via `prepare._unit_api_facts`,
 both gitnexus and direct modes). So the model COPIES `read_attribute(idn, index=…, selector=…)`
 and `AttributeIDN` members verbatim instead of guessing `lun=` / wrong enum case. This is
 additive: wiki (flow meaning) and gitnexus/code-candidate discovery still run; the facts only
 nail the exact form. Correctness comes from these deterministic facts, not from more candidate names.
+- **Code query ≠ wiki query** (`prepare._unit_code_query`): the symbols FEED resolves facts for
+  come from a query enriched with the unit's `produces`/`consumes`/`set_vars` var names
+  (`write_record_p1`→`write record`), NOT the raw protocol tokens (`WRITE(10)`, `POR`) — those
+  match low-level CDB classes, so FEED would inject facts for the wrong abstraction layer.
+  This helps where the var names carry API vocabulary; pure-operation steps with no data-flow
+  vars (e.g. bare POR) still need gitnexus's semantic/graph layer to bridge the vocabulary gap.
+- **Mode-aware fact authority:** in **gitnexus** mode the injected facts are a CROSS-CHECK
+  (retrieved by the weaker code_retrieval proxy → may be sibling/wrong-layer); the signature
+  the model confirms via its own gitnexus `context()` is PRIMARY and wins on conflict. In
+  **direct** mode (no gitnexus) they stay AUTHORITATIVE. So the FEED never out-ranks the
+  model's own gitnexus discovery when the two disagree.
 - **Defaults provenance:** `<run>/defaults_debug.md` (deterministic — which default
   overrides + ModelDefault topic were OFFERED to each unit) + `retrieval_debug.md` (which
   embeds it, alongside the model's self-reported `# src[wiki]` usage).

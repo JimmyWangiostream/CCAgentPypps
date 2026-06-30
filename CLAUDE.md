@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+> **Generating a pattern from a TC?** A packaged skill at
+> `.claude/skills/generate-pattern/SKILL.md` indexes the whole pipeline (any agent can invoke
+> it); `AGENTS.md` is the detailed runbook. This file has the command syntax + Step rules.
+
 ## Environment & Dependencies (read first)
 
 - **Code grounding (gitnexus)**: the gitnexus MCP server's index lives at the relative path
@@ -14,14 +18,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
     (`--skip-git` because it is not a git repo; omit `--drop-embeddings` to keep existing
     embeddings for an incremental update).
 - **Two `Script/` trees (don't confuse them):**
-  - `GitNexusMCP/Script/` — the gitnexus-indexed **subset** (`api/`, `pattern/`,
-    `project_api/`). Patterns are **generated here** (`PGConfig.generated_dir`) and this is
-    what `from Script import api` resolves against for **mypy**. It has **no `lib/`**.
+  - `GitNexusMCP/Script/` — the gitnexus-indexed tree (`api/`, `pattern/`,
+    `project_api/`, **and now `lib/sdk_lib/`**). Patterns are **generated here**
+    (`PGConfig.generated_dir`) and this is what `from Script import api` resolves against
+    for **mypy**. `lib/sdk_lib/` (the SDK/HAL) was added here and **is now in the gitnexus
+    index** (graph + FTS + embeddings + `context` signatures), so `from Script.lib import
+    sdk_lib` symbols are groundable at generation time. It is still **excluded from the
+    mypy gate** (see below) — grounded, but not type-checked.
   - repo-root `Script/` — the **full runtime library**: same `api/` etc. **plus
-    `lib/sdk_lib/`** (the SDK/HAL). Every pattern imports `from Script.lib import sdk_lib`,
-    which only resolves here, so **keep it** (do not delete it as a "duplicate"). mypy from
-    `GitNexusMCP/` ignores/excludes `^Script/lib`, so the missing `lib/` doesn't break the
-    type-check — see the step-6b note below.
+    `lib/sdk_lib/`** (the SDK/HAL). Every pattern imports `from Script.lib import sdk_lib`;
+    keep this tree (do not delete it as a "duplicate"). mypy from `GitNexusMCP/`
+    ignores/excludes `^Script/lib` in BOTH trees, so `lib/` (HAL, with pre-existing type
+    issues) doesn't break the type-check — see the step-6b note below.
   - The `mypy_skip_known_issue.ini` lives in `GitNexusMCP/`; run mypy from that dir.
 - **Python dependencies**:
   - The **core pipeline is pure stdlib** — `prepare-ir` / `finalize-ir` / `prepare` /
@@ -57,8 +65,17 @@ python generate_pattern.py finalize-ir <GEN>/<ID>/ir_skeleton.json <GEN>/<ID>/an
 # Pipeline step 4: IR → scaffold.py + 1_units.json + first unit prompt
 python generate_pattern.py prepare <GEN>/<ID>/<id>-ir.json
 
-# Pipeline step 4b: build unit N's prompt (embeds upstream unit methods)
+# Pipeline step 4b: build unit N's prompt (embeds upstream unit methods).
+#   ALSO runs the per-unit gate on unit N-1 and, if it failed, prepends a
+#   "## FIX UPSTREAM UNIT FIRST" block to unit N's prompt (self-heals upstream bugs).
 python generate_pattern.py prepare-unit <GEN>/<ID>/ <N>
+
+# Pipeline step 5b (per-unit gate): after WRITING unit N's methods, run the SAME
+# deterministic checks the final gate runs (api_grounding + semantic + citation) on
+# THAT unit. On FAIL (exit 1): read the findings, REWRITE unit_NN_<id>_methods.py, re-run;
+# then proceed to the next unit. Catches the bug at its source unit, not at end-stage
+# review. (pattern_generator.unit_gate.check_unit — same source of truth as `validate`.)
+python generate_pattern.py validate-unit <GEN>/<ID>/ <N>   # [--script-root <path>]
 
 # Paths: <GEN> = GitNexusMCP/Script/pattern/generated (the generated base, inside the
 # Script/ tree so patterns are mypy-able). Per-run by-products live in <GEN>/<ID>/;
@@ -71,10 +88,12 @@ python generate_pattern.py assemble <GEN>/<ID>/ <PatternName>
 # Pipeline step 6: validate generated pattern against IR (+ API-reality check vs Script)
 python generate_pattern.py validate <GEN>/<PatternName>.py <GEN>/<ID>/<id>-ir.json
 #   optional: --script-root <path>  (defaults to PGConfig.script_root = GitNexusMCP/Script)
-#   Report keys: syntax, structure, dataflow, api_grounding, mypy. structure catches methods
-#   defined OUTSIDE the pattern class (parses but process() runs nothing = false PASS) +
+#   Report keys: syntax, structure, dataflow, api_grounding, semantic, mypy. structure catches
+#   methods defined OUTSIDE the pattern class (parses but process() runs nothing = false PASS) +
 #   def-after-__main__ + missing planned methods; dataflow flags a consumer that overwrites
-#   a consumed var without reading it; api_grounding adds missing_required_arg; mypy runs the
+#   a consumed var without reading it; api_grounding adds missing_required_arg; semantic adds
+#   deterministic MEANING checks api_grounding can't (e.g. WriteBooster support read via the
+#   FFU bit u0_ffu instead of u8_write_booster) — pure AST, no Script needed; mypy runs the
 #   type-check gate (per-file, from GitNexusMCP/ + its ini) — catches type errors api_grounding
 #   can't; "skipped" if mypy/config absent. --no-mypy to disable. Step 6b is now automatic.
 #   Appends findings to gate_logs/<id>.gate_log.md (history). --gate-log-dir to override.
@@ -115,10 +134,11 @@ cd GitNexusMCP && python -m mypy --config-file mypy_skip_known_issue.ini --follo
 #   - the bulk form (`... ./`) follows imports into the Script library and surfaces
 #     PRE-EXISTING library type errors (adv_rpmb, device_desc, pattern_template) — not
 #     your pattern's. Prefer the per-file form above.
-#   - NOTE Script.lib has no copy under GitNexusMCP/Script (it's the gitnexus-indexed
-#     subset); the ini ignores/excludes ^Script/lib so `from Script.lib import sdk_lib`
-#     becomes Any. That's fine — the bug-catching imports (Script.api, Script.pattern.*,
-#     cmd_seq) all resolve here. See "Environment & Dependencies" for the two Script trees.
+#   - NOTE Script.lib/sdk_lib now EXISTS under GitNexusMCP/Script and IS in the gitnexus
+#     index (so it's groundable), but the mypy ini still ignores/excludes ^Script/lib, so
+#     `from Script.lib import sdk_lib` becomes Any for the type-check. That's fine — the
+#     bug-catching imports (Script.api, Script.pattern.*, cmd_seq) all resolve here. See
+#     "Environment & Dependencies" for the two Script trees.
 
 # Code grounding: use the gitnexus MCP server (indexes Script/). At generation
 # time call its `query` tool (top-N candidate symbols) + `context` (signatures).
@@ -127,6 +147,11 @@ cd GitNexusMCP && python -m mypy --config-file mypy_skip_known_issue.ini --follo
 # Wiki grounding: build the layered index, then query it
 python wiki_index.py build              # steps 2+3: reference graph + (optional) dense
 python wiki_retrieve.py "<query>"       # steps 4+5: RRF retrieval + extractive essence
+
+# Wiki health check (deterministic; SCHEMA.md's "Lint" operation): dangling [[wikilinks]],
+# missing `type:` frontmatter, orphans, stale default.md, conflicts->missing pages, and
+# unused source/code trees under wiki/ (code tree = ERROR). Reports only; exit 1 on any error.
+python wiki_lint.py                     # [--wiki <path>]  (wiki_retrieval/lint.py)
 
 # Project defaults: merge wiki/UserPrompt + wiki/ModelDefault (+conflicts) -> wiki/default.md
 python generate_pattern.py build-defaults
@@ -172,7 +197,13 @@ so it can be type-checked (mypy) and indexed alongside the real patterns.
 ## Key Architectural Components
 
 ### IR Generator (`ir_generator/`)
-- `parser.py`: Parses TC `.md` via regex into phase/step skeleton with metadata
+- `parser.py`: Parses TC `.md` via regex into phase/step skeleton with metadata. Also
+  **collapses a cross-phase loop** (`_collapse_loop_region`): when the JIRA 對照表 has a
+  `| Loop | … | Loop（Phase 1 → Phase 2 → Phase 3）|` row (no `## Loop` header), the named
+  contiguous phases are merged into ONE `type:"loop"` phase so `stepwise.generation_units`
+  materializes the burn-in `for` loop. No-op when there's no Loop row / a phase already is a
+  loop / the phases aren't contiguous. (Fixes the silently-dropped loop; the `loop_back` edge
+  representation is no longer needed.)
 - `prepare_ir.py`: Orchestrates TC → `ir_skeleton.json` + `enrich_prompt.txt`
 - `enrich_prompt.py`: Builds the LLM Step A prompt (asks for phase data flow)
 - `wiki_lookup.py`: Per-phase wiki refs via the layered retriever (`wiki_retrieval.retrieve`); applies conflict-resolved overrides
@@ -185,12 +216,13 @@ Layered retrieval over the ingested wiki (`wiki/concepts/` + `wiki/entities/`):
 - `essence.py`: deterministic extractive "concept → entity → reference → conflict" essence (step 5)
 
 ### Pattern Generator (`pattern_generator/`)
-- `stepwise.py`: Orders phases topologically and flattens to generation **units** (`generation_units`); builds `scaffold.py` and per-unit prompts (`build_one_unit_prompt`) — injects wiki RRF top-5 essence + `self.*` contracts + upstream continuity, and instructs the agent to call gitnexus for code refs
-- `prepare.py`: `prepare_pattern` writes `scaffold.py` + `1_units.json` + first unit prompt; `prepare_unit` lazily builds unit N's prompt (wiki essence injected, upstream `unit_*_methods.py` embedded)
+- `stepwise.py`: Orders phases topologically and flattens to generation **units** (`generation_units`); builds `scaffold.py` and per-unit prompts (`build_one_unit_prompt`) — injects wiki RRF top-5 essence + `self.*` contracts + upstream continuity, and instructs the agent to call gitnexus for code refs. The gitnexus grounding instructions carry an **IDIOM & SELECTION** block: `query` returns not just candidate names but PROCESSES + `sample_code`/real-pattern files, and when several sibling symbols look plausible the model must disambiguate by READING a real caller/sample idiom (not by name similarity / rank1) — the protocol *path* is the test (e.g. WriteBooster support = `get_extended_ufs_features_support().u8_write_booster`, not a descriptor field). This attacks the wrong-API-chosen trap that `context`-signature-confirmation alone cannot.
+- `prepare.py`: `prepare_pattern` writes `scaffold.py` + `1_units.json` + first unit prompt; `prepare_unit` lazily builds unit N's prompt (wiki essence injected, upstream `unit_*_methods.py` embedded). **Two query builders:** `_unit_query` (wiki/defaults — protocol tokens) and `_unit_code_query` (code candidates + api-facts FEED — `_unit_query` PLUS the unit's `produces`/`consumes`/`set_vars` var names, underscore-split into intent words). Raw protocol tokens (`WRITE(10)`, `POR`) retrieve the WRONG abstraction layer (low-level CDB classes); var names like `write_record_p1`→`write record` bridge to the high-level api idiom (surfaces `get_empty_write_record` rank2 where the raw query missed). Keep code retrieval on `_unit_code_query`, not `_unit_query`. **Canonical idioms are passed SEPARATELY** (`_unit_canonical` → `build_one_unit_prompt(canonical_facts=…)`): they are the PREVENT half of an enforced gate rule, so they ride their OWN authoritative block (override any contradicting IR-step path) and are NOT bundled into the mode-aware-demoted heuristic `api_facts`. `prepare` also writes `<run>/ir_lint.md` (Lever #4 protocol-path contradictions).
 - `assemble.py`: Merges scaffold + `unit_NN_*_methods.py` into the final `.py` (+ `retrieval_debug.md`)
-- `validator.py`: Validates `.py` against IR — `syntax` + `structure` (every stepN/helper is a class member; no method outside the class / after `if __name__`; planned methods present; loop_count) + `dataflow` (a consumer must not overwrite a `consumes` var without reading it) + `api_grounding`
-- `api_grounding.py`: the AST index over Script, used TWICE. (1) **CHECK** (`check_api_calls`): reality-check `api.`/`ExecuteCMD.`/`lib.` calls — unknown symbol / unknown kwarg / too-many-positional / **missing_required_arg** / **unknown_enum_member**; findings carry the real signature. (2) **FEED** (`api_facts`, Phase B): inject the exact signatures + relevant enum members for a unit's likely symbols INTO the generation prompt (via `prepare._unit_api_facts`, both grounding modes) so the model copies (`index=`, `IDLE`) instead of guessing. Same source of truth for prevent + catch.
-- `rules.py`: loader over `review_refs/*.md` — the pitfall docs ARE the rule pack (add a rule = add a `.md`, no code). `select_refs(text, cap=6)` keyword-selects the relevant docs (BM25, score>0 only), `format_refs` renders them. This is the SEMANTIC layer; the deterministic API-detail layer is `api_grounding.py` (the two are complementary — an LLM review guesses param/enum/signature, the AST index never does).
+- `validator.py`: Validates `.py` against IR — `syntax` + `structure` (every stepN/helper is a class member; no method outside the class / after `if __name__`; planned methods present; loop_count) + `dataflow` (a consumer must not overwrite a `consumes` var without reading it) + `api_grounding` + `semantic`
+- `semantic_checks.py`: deterministic SEMANTIC layer (sibling to `api_grounding`) — catches MEANING-level bugs the AST symbol-check deliberately skips (attribute access / value logic). Rule registry; findings reuse the `check_api_calls` issue-dict shape so `format_issues` + the gate (`validator` `semantic` key, `driver._GATE_KEYS`) handle them unchanged. CATCH (`check_semantics`) + PREVENT (`CANONICAL_IDIOMS`/`canonical_facts`, injected via `prepare._unit_api_facts`), one source of truth. Active rule `wb_support_path` (WriteBooster support must be `get_extended_ufs_features_support().u8_write_booster`, not the FFU bit `u0_ffu`). **IR-level flag (Lever #4):** `check_ir_protocol_paths(ir)` (registry `IR_PATH_RULES`, same idiom source) flags a STEP whose stated protocol path contradicts a canonical idiom (e.g. a WB-support step grounded to READ DESCRIPTOR / Device Descriptor) — **report-only** (never rewrites the TC; surfaced by `prepare` to `<run>/ir_lint.md`), while the generation prompt's authoritative canonical block OVERRIDES the contradiction. Conservative/false-negative bias like `api_grounding`. (`_device_init_polarity` is written but DORMANT — readiness polarity disputed across artifacts; do not enforce until confirmed.) Add a rule = add a matcher fn + register in `RULES` + a test.
+- `api_grounding.py`: the AST index over Script, used FOUR ways. (1) **CHECK** (`check_api_calls`): reality-check `api.`/`ExecuteCMD.`/`lib.` calls — unknown symbol / unknown kwarg / too-many-positional / **missing_required_arg** / **unknown_enum_member**; findings carry the real signature. (2) **FEED** (`api_facts`, Phase B): inject the exact signatures + relevant enum members for a unit's likely symbols INTO the generation prompt (via `prepare._unit_api_facts`, both grounding modes) so the model copies (`index=`, `IDLE`) instead of guessing. The "likely symbols" are resolved by `code_retrieval` over `prepare._unit_code_query` (the data-flow-var-enriched query — protocol-token-only queries surface wrong-layer symbols, so FEED would otherwise inject facts for the wrong API; see `prepare.py`). **Mode-aware authority** (`build_one_unit_prompt`): in **direct** mode code_retrieval is the only code source so the facts are labelled AUTHORITATIVE (copy verbatim, confirm by reading source); in **gitnexus** mode they are labelled a CROSS-CHECK — the model's own gitnexus `context()` on the symbol IT picked is PRIMARY and wins on conflict (model-side FEED↔discovery alignment, since Python can't query the MCP-only gitnexus at prepare time). (3) **CITATION REALITY** (`check_citations`): audit the agent's self-reported `=== CODE REFS ===` — flag a cited `path.py:symbol` whose symbol exists NOWHERE in Script (fabricated grounding citation, e.g. `random_read_and_compare`); surfaced per-unit in `retrieval_debug.md` by `assemble` (the harmful case — a fake symbol actually USED in code — is already a gate failure via CHECK). (4) **STRUCT FIELDS** (`check_struct_fields` + `_build_struct_fields`/`resolve_fields`, fed via `api_facts`): the index also captures each function's return-type (`SigSpec.returns`) and every struct's field set (`self.x=` + class-level + `@property`, merged across base classes). FEED injects `<ReturnType> fields: …` so the model copies the real field; CATCH flags `var.field`/`api.F().field` where the field isn't on that return struct (e.g. reading a `DeviceDescriptor` field `l85_…` off the WriteBooster-support union) — precise via var-origin (single-assignment) + inline-call, conservative (skips chains/`self.*`, global fallback when a type can't be resolved → ~0 false positives over the real pattern corpus). Single AST source of truth for prevent + catch + audit.
+- `rules.py`: loader over `review_refs/*.md` — the pitfall docs ARE the rule pack (add a rule = add a `.md`, no code). `select_refs(text, cap=6)` keyword-selects the relevant docs (BM25, score>0 only), `format_refs` renders them. This is the ADVISORY semantic layer (LLM review, BM25-selected, may not fire). The DETERMINISTIC layers are `api_grounding.py` (symbol/signature reality) and `semantic_checks.py` (machine-decidable MEANING invariants, enforced by the gate). High-value rules should be promoted from the advisory `.md` to `semantic_checks.py` so they are enforced, not merely suggested (when promoting, trim the `.md` to a pointer so prose can't contradict the enforcer).
 - `review_refs/`: markdown pitfall docs (volatile-flag-assert-discipline, step03-query-vs-descriptor-trap, exception-naming-convention, writebooster-ssu-reset-pitfalls, …) ported from the external code-review agent. Drop a new `.md` here to add a review rule.
 - `review.py`: `build_review_prompt` — IR checkpoints (each `expected`/`fail_condition` must be implemented AND asserted) + keyword-selected review references + the normalized TC flow (step-compliance cross-check) + whole file → LLM emits a corrected file. `find_tc_flow(ir, tc_dir)` loads `TC/<id>-normalized-test-flow.md`.
 - `wholefile.py`: `build_wholefile_prompt` — Stage-3 coherent authoring (unit plan + `self.*` contract + `idioms.py` worked-snippet anchors + review references)
@@ -200,6 +232,7 @@ Layered retrieval over the ingested wiki (`wiki/concepts/` + `wiki/entities/`):
 - **Code (default)** — the **gitnexus** MCP server (indexes `Script/`). The agent calls its `query`/`context` tools at generation time to get real symbols.
 - **Code (alt, `--grounding direct`)** — `code_retrieval/` (AST index over `Script` + reused BM25) injects top-N candidate symbols / worked idioms; no MCP server. The `validator` api-grounding check always reads `Script` directly regardless of mode.
 - **LLM-Wiki** (`wiki/`): layered retriever (above). The pipeline injects the RRF top-5 essence into each unit prompt; conflict overrides win.
+- **VC — Verification Criteria** (`wiki/VC/`, `wiki_retrieval/vc.py`): 361 per-pattern test specs (criterion + checkpoints + expected results, rich in real API idioms; no frontmatter, layer forced to `vc`). Used TWICE, like the other deterministic-vs-LLM split: (1) a small capped **retrieval band** in the unit-prompt essence (`Retriever`/`build_essence`, `n_vc=2`, BM25-gated so an unrelated query surfaces none); (2) **review injection** — `review.build_review_prompt` adds matched VC docs (keyword-selected + exact `pattern_id` prioritized) as checkpoints the pattern must implement+assert. `wiki_index build` embeds the `vc` layer for dense.
 
 ### Pattern Base (`pattern_template_wizard/pattern_template.py`)
 Generated patterns subclass `UFSTC`, implementing `step1()`, `step2()`, ... methods that are auto-run by `process()`. Data flows across steps via `self.var_name` attributes. Override `pre_process()` / `post_process()` for device setup/teardown.
