@@ -13,16 +13,29 @@ Per-unit method files follow this output format (sections in order):
         def stepN(self) -> None:
             ...
 """
+import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from pattern_generator.api_grounding import (
-    build_script_index, check_api_calls, format_issues,
-)
+from pattern_generator.api_grounding import build_script_index
+from pattern_generator.unit_gate import check_unit
 
 EXTRA_IMPORTS_MARKER = "# @@EXTRA_IMPORTS@@"
 METHODS_MARKER = "    # @@PHASE_METHODS@@"
+
+# The scaffold's deterministic pre/post_process stubs (see stepwise.build_scaffold).
+# When a unit PROVIDES one of these methods, the stub is stripped so the unit's
+# version REPLACES it instead of duplicating the def (Python keeps the last def
+# silently; the validator's duplicate check backstops any other collision).
+_SCAFFOLD_STUB_RE = {
+    "pre_process": re.compile(
+        r"    def pre_process\(self\) -> None:\n"
+        r"        pass  # TODO human-confirm[^\n]*\n\n?"),
+    "post_process": re.compile(
+        r"    def post_process\(self\) -> None:\n"
+        r"        pass  # TODO human-confirm[^\n]*\n\n?"),
+}
 
 REVIEW_FLAGS = ("TODO-REVIEW-NO-WIKI", "TODO-REVIEW-NO-CODE-REF", "TODO-REVIEW-BOTH-MISS")
 
@@ -161,28 +174,56 @@ def assemble_pattern(run_dir, pattern_name: str, script_root=None, output_dir=No
             seen.add(line)
             deduped_imports.append(line)
 
+    merged_methods = "\n\n".join(all_methods)
+    # A unit that provides pre_process/post_process REPLACES the scaffold stub.
+    for name, stub_re in _SCAFFOLD_STUB_RE.items():
+        if re.search(rf"(?m)^    def {name}\b", merged_methods):
+            scaffold = stub_re.sub("", scaffold, count=1)
+
     result = scaffold.replace(EXTRA_IMPORTS_MARKER, "\n".join(deduped_imports), 1)
-    result = result.replace(METHODS_MARKER, "\n\n".join(all_methods), 1)
+    result = result.replace(METHODS_MARKER, merged_methods, 1)
 
     (main_dir / f"{pattern_name}.py").write_text(result, encoding="utf-8")
 
-    # API-reality findings per unit (best-effort; needs the Script library).
-    api_issues: dict = {}
-    index = build_script_index(script_root) if script_root else None
-    if index:
-        for fname, u in parsed:
-            if not u.methods:
-                continue
-            # Wrap in a dummy class so the 4-space-indented methods parse.
-            issues = check_api_calls("class _W:\n" + u.methods, index)
-            if issues:
-                api_issues[fname] = format_issues(issues)
+    # The unit plan (when present) pins each file's expected method + loop arity.
+    plan_by_fname: dict = {}
+    plan_file = run_dir / "1_units.json"
+    if plan_file.is_file():
+        try:
+            from pattern_generator.prepare import _unit_methods_filename
+            for pu in json.loads(plan_file.read_text(encoding="utf-8")):
+                plan_by_fname[_unit_methods_filename(pu)] = pu
+        except Exception:
+            plan_by_fname = {}
 
-    _write_retrieval_debug(run_dir, parsed, api_issues)
+    # Per-unit deterministic findings (same checks as the gate, run per unit). Best-effort:
+    # api/citation need the Script library; semantic is pure AST. See unit_gate.check_unit.
+    api_issues: dict = {}
+    sem_issues: dict = {}
+    cite_issues: dict = {}
+    index = build_script_index(script_root) if script_root else None
+    for fname, u in parsed:
+        if not u.methods:
+            continue
+        pu = plan_by_fname.get(fname) or {}
+        res = check_unit(u.methods, code_refs=u.code_refs, script_root=script_root, index=index,
+                         expected_methods=[pu["method"]] if pu.get("method") else None,
+                         extra_imports=deduped_imports,   # assembly scope = union of imports
+                         loop_idx_required=bool(pu.get("loop_idx_param")))
+        if res["api"]:
+            api_issues[fname] = res["api"]
+        if res["citation"]:
+            cite_issues[fname] = res["citation"]
+        if res["semantic"]:
+            sem_issues[fname] = res["semantic"]
+
+    _write_retrieval_debug(run_dir, parsed, api_issues, sem_issues, cite_issues)
     return result
 
 
-def _write_retrieval_debug(run_dir: Path, parsed: list, api_issues: dict | None = None) -> None:
+def _write_retrieval_debug(run_dir: Path, parsed: list, api_issues: dict | None = None,
+                           sem_issues: dict | None = None,
+                           cite_issues: dict | None = None) -> None:
     """Write retrieval_debug.md: per-unit wiki top-5 + code top-5 + review flag,
     with a flag-count summary at the top.
 
@@ -191,8 +232,12 @@ def _write_retrieval_debug(run_dir: Path, parsed: list, api_issues: dict | None 
     flagged even if the agent forgot to). `api_issues` maps filename -> list of
     api-grounding problem strings (unknown symbol / bad signature)."""
     api_issues = api_issues or {}
+    sem_issues = sem_issues or {}
+    cite_issues = cite_issues or {}
     counts = {flag: 0 for flag in REVIEW_FLAGS}
     api_issue_count = 0
+    sem_issue_count = 0
+    cite_issue_count = 0
     body: list = []
     for fname, u in parsed:
         body.append(f"## {fname}")
@@ -221,11 +266,19 @@ def _write_retrieval_debug(run_dir: Path, parsed: list, api_issues: dict | None 
             api_issue_count += len(api_issues[fname])
             body.append("**⚠️ api-grounding issues (validator):**")
             body.extend(f"- {msg}" for msg in api_issues[fname])
+        if fname in sem_issues:
+            sem_issue_count += len(sem_issues[fname])
+            body.append("**⚠️ semantic issues (validator):**")
+            body.extend(f"- {msg}" for msg in sem_issues[fname])
+        if fname in cite_issues:
+            cite_issue_count += len(cite_issues[fname])
+            body.append("**⚠️ fabricated citation(s):**")
+            body.extend(f"- {msg}" for msg in cite_issues[fname])
         body.append("")
 
     header = ["# Retrieval Debug", ""]
     total_flagged = sum(counts.values())
-    if total_flagged or api_issue_count:
+    if total_flagged or api_issue_count or sem_issue_count or cite_issue_count:
         if total_flagged:
             header.append("> ⚠️ review flags raised:")
             for flag, n in counts.items():
@@ -234,6 +287,12 @@ def _write_retrieval_debug(run_dir: Path, parsed: list, api_issues: dict | None 
         if api_issue_count:
             header.append(f"> ⚠️ api-grounding issues: {api_issue_count} "
                           "(unknown symbol / bad signature — see units below)")
+        if sem_issue_count:
+            header.append(f"> ⚠️ semantic issues: {sem_issue_count} "
+                          "(wrong field/polarity — see units below)")
+        if cite_issue_count:
+            header.append(f"> ⚠️ fabricated citations: {cite_issue_count} "
+                          "(code-ref cites a symbol not in Script — see units below)")
         header.append("")
     else:
         header.append("_(no review flags — every unit grounded in both wiki and code)_")

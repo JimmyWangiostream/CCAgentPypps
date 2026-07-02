@@ -56,12 +56,19 @@ def canonical_facts(query: str) -> list:
 
 # --------------------------------------------------------------------------- #
 # IR-level protocol-path check (Lever #4) — flag a STEP whose stated protocol path
-# CONTRADICTS a canonical idiom, BEFORE generation. Report-only: a step may
-# legitimately exercise the other path, and deterministically rewriting a TC's
-# protocol path is the kind of guess this project refuses (cf. device_init
-# dormancy). One source of truth: the same idioms PREVENT (canonical_facts),
-# CATCH (check_semantics), and now FLAG-UPSTREAM here. Seed rule = wb_support_path.
-# Add a rule = add a matcher fn to IR_PATH_RULES + a test.
+# CONTRADICTS a canonical idiom, BEFORE generation. Report-only framework; a step
+# may legitimately exercise another path, and deterministically rewriting a TC's
+# protocol path is the kind of guess this project refuses (cf. device_init dormancy).
+#
+# The seed rule `_ir_wb_support_path` was RETIRED: it treated "READ DESCRIPTOR of the
+# Device Descriptor" as the WRONG WB-support path and suggested "READ ATTRIBUTE
+# dExtendedUFSFeaturesSupport" — but that premise is false. `get_extended_ufs_features
+# _support()` reads WB support from the Device Descriptor field l79 via READ DESCRIPTOR;
+# there is no READ ATTRIBUTE path, so a TC that says "READ DESCRIPTOR Device Descriptor"
+# for a WB-support check is CORRECT and must not be flagged. The real wrong-field error
+# (reading the u0_ffu FFU bit / a buffer-type field) is still caught at CODE level by
+# check_semantics' `wb_support_path`. No valid IR-level trigger remains -> IR_PATH_RULES
+# is empty. Add a rule = add a matcher fn to IR_PATH_RULES + a test.
 # --------------------------------------------------------------------------- #
 
 def _step_text(step: dict) -> str:
@@ -70,33 +77,7 @@ def _step_text(step: dict) -> str:
                     for k in ("name", "ufs_query", "idn", "raw_content")).lower()
 
 
-def _ir_wb_support_path(step: dict):
-    """A WriteBooster *support/capability* check grounded to the Device Descriptor
-    path instead of READ ATTRIBUTE dExtendedUFSFeaturesSupport. Support tokens are
-    bilingual (TCs mix the English feature name with Chinese prose)."""
-    text = _step_text(step)
-    if "write booster" not in text:
-        return None
-    if not any(t in text for t in ("support", "capability", "支援", "能力")):
-        return None  # a config/enable step, not a support check
-    wrong = any(t in text for t in ("device descriptor", "read descriptor"))
-    right = any(t in text for t in ("dextendedufsfeaturessupport", "read attribute",
-                                    "extended ufs features",
-                                    "get_extended_ufs_features_support"))
-    if wrong and not right:
-        return {
-            "alias": "ir", "symbol": "wb_support_path",
-            "kind": "ir_wrong_protocol_path", "step_id": step.get("step_id"),
-            "detail": (f"step {step.get('step_id')} is a WriteBooster support check but "
-                       "names the Device Descriptor path; WB support MUST use READ "
-                       "ATTRIBUTE dExtendedUFSFeaturesSupport "
-                       "(api.get_extended_ufs_features_support().u8_write_booster)"),
-            "suggestion": "READ ATTRIBUTE dExtendedUFSFeaturesSupport",
-        }
-    return None
-
-
-IR_PATH_RULES = (_ir_wb_support_path,)
+IR_PATH_RULES: tuple = ()
 
 
 def check_ir_protocol_paths(ir: dict) -> list:

@@ -235,7 +235,9 @@ def test_prepare_writes_ir_lint(tmp_path):
     assert "no contradictions" in lint.read_text(encoding="utf-8")
 
 
-def test_prepare_ir_lint_flags_wb_support_descriptor_path(tmp_path):
+def test_prepare_ir_lint_does_not_flag_wb_support_descriptor_path(tmp_path):
+    # WB support via READ DESCRIPTOR of the Device Descriptor is the CORRECT path, so the
+    # ir_lint must NOT flag it (the false-premised _ir_wb_support_path rule was retired).
     ir = {
         "pattern_id": "PFWB_0001", "title": "wb", "description": "", "tags": [],
         "phases": [{"phase_id": "phase_0", "name": "p", "type": "sequential",
@@ -251,8 +253,8 @@ def test_prepare_ir_lint_flags_wb_support_descriptor_path(tmp_path):
     ir_path.write_text(json.dumps(ir), encoding="utf-8")
     out = prepare_pattern(ir_path, _cfg(tmp_path))
     txt = (Path(out["run_dir"]) / "ir_lint.md").read_text(encoding="utf-8")
-    assert "ir_wrong_protocol_path" in txt
-    assert "dExtendedUFSFeaturesSupport" in txt
+    assert "no contradictions" in txt
+    assert "ir_wrong_protocol_path" not in txt
 
 
 def test_prepare_writes_defaults_debug(tmp_path):

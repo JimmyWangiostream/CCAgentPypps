@@ -84,19 +84,13 @@ def _ir(*steps):
     return {"phases": [{"phase_id": "p", "steps": list(steps)}]}
 
 
-def test_ir_flags_wb_support_on_descriptor_path():
-    # The real PF010_0310 step_0_1 shape: WB support check via READ DESCRIPTOR.
+def test_ir_does_not_flag_wb_support_via_read_descriptor():
+    # The real PF010_0310 step_0_1 shape: WB support check via READ DESCRIPTOR of the
+    # Device Descriptor. This is the CORRECT path (get_extended_ufs_features_support reads
+    # descriptor field l79), so it must NOT be flagged — the retired _ir_wb_support_path
+    # rule was false-premised.
     ir = _ir({"step_id": "step_0_1", "name": "檢查 Write Booster 支援能力",
               "ufs_query": "READ DESCRIPTOR (0x07)", "idn": "0x00 (Device Descriptor)"})
-    issues = check_ir_protocol_paths(ir)
-    assert [i["kind"] for i in issues] == ["ir_wrong_protocol_path"]
-    assert issues[0]["step_id"] == "step_0_1"
-    assert "dExtendedUFSFeaturesSupport" in issues[0]["detail"]
-
-
-def test_ir_clean_on_correct_attribute_path():
-    ir = _ir({"step_id": "s", "name": "check Write Booster support",
-              "ufs_query": "READ ATTRIBUTE", "idn": "dExtendedUFSFeaturesSupport"})
     assert check_ir_protocol_paths(ir) == []
 
 

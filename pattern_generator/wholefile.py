@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 
+from pattern_generator.api_grounding import NAMESPACE_RULE
 from pattern_generator.stepwise import generation_units, build_scaffold
 from pattern_generator.rules import select_refs, format_refs
 from pattern_generator.idioms import find_idiom, format_idiom
@@ -42,7 +43,9 @@ HARD RULES (the validator + review gate enforce these):
 - For EVERY step, implement it AND enforce its expected/fail_condition with
   `raise api.PATTERN_ASSERT_*` — never just log (logging a check = silent false pass).
 - Ground each API call on the worked IDIOMS below; confirm exact signatures by reading
-  GitNexusMCP/Script source if unsure. Follow the RULE PACK."""
+  GitNexusMCP/Script source if unsure. Follow the RULE PACK.
+
+""" + NAMESPACE_RULE
 
 
 def _dataflow_contract(units: list) -> str:

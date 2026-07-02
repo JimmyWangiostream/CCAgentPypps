@@ -245,3 +245,36 @@ class TestAssemblePattern:
         assemble_pattern(tmp_path, "MyTest", output_dir=tmp_path)
         dbg = (tmp_path / "retrieval_debug.md").read_text(encoding="utf-8")
         assert "TODO-REVIEW-NO-CODE-REF" not in dbg
+
+
+class TestScaffoldStubReplacement:
+    """A unit that PROVIDES pre/post_process must REPLACE the scaffold stub, not
+    duplicate it (the PF010_0310 'post_process already defined' bug)."""
+
+    UNIT_POST = (
+        "=== WIKI REFS ===\nNO MATCH\n"
+        "=== CODE REFS ===\nNO MATCH\n"
+        "=== REVIEW FLAGS ===\n"
+        "=== METHODS ===\n"
+        "    def post_process(self) -> None:\n"
+        "        self.teardown_done = True\n")
+
+    def _real_scaffold(self) -> str:
+        from pattern_generator.stepwise import build_scaffold
+        return build_scaffold({"pattern_id": "PFZ", "title": "StubTest", "phases": []})
+
+    def test_unit_post_process_replaces_stub(self, tmp_path):
+        (tmp_path / "scaffold.py").write_text(self._real_scaffold(), encoding="utf-8")
+        (tmp_path / "unit_01_x_methods.py").write_text(UNIT_0, encoding="utf-8")
+        (tmp_path / "unit_02_post_methods.py").write_text(self.UNIT_POST, encoding="utf-8")
+        src = assemble_pattern(tmp_path, "T1", output_dir=tmp_path)
+        assert src.count("def post_process") == 1
+        assert "self.teardown_done = True" in src           # the unit's version won
+        assert "post-test teardown" not in src              # the stub is gone
+
+    def test_stub_retained_without_unit_post_process(self, tmp_path):
+        (tmp_path / "scaffold.py").write_text(self._real_scaffold(), encoding="utf-8")
+        (tmp_path / "unit_01_x_methods.py").write_text(UNIT_0, encoding="utf-8")
+        src = assemble_pattern(tmp_path, "T2", output_dir=tmp_path)
+        assert src.count("def post_process") == 1
+        assert "post-test teardown" in src                  # stub kept

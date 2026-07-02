@@ -38,10 +38,11 @@ class EssenceResult:
     top: list                            # [stem, ...] top-N overall (the "top 5")
     docs: dict = field(default_factory=dict)
     dense_used: bool = False
+    vc: list = field(default_factory=list)   # [(stem, score), ...] verification-criteria band
 
     @property
     def has_match(self) -> bool:
-        return bool(self.concepts or self.entities)
+        return bool(self.concepts or self.entities or self.vc)
 
 
 class Retriever:
@@ -70,6 +71,11 @@ class Retriever:
         if use_dense and self.embedder.available:
             self._init_dense()
 
+        # VC (verification-criteria) band — a flat keyword/dense layer over wiki/VC,
+        # surfaced as a small capped section (NOT part of the concept->entity graph).
+        from wiki_retrieval.vc import VcIndex
+        self.vcindex = VcIndex(self.wiki_root, use_dense=use_dense, embedder=self.embedder)
+
     def _init_dense(self):
         _manifest, stored = index_store.load_embeddings(self.wiki_root)
         for layer, stems in self._by_layer.items():
@@ -91,7 +97,7 @@ class Retriever:
         return rrf(rankings)
 
     def retrieve(self, query: str, n_concept: int = 3, n_entity: int = 5,
-                 top_n: int = 5) -> EssenceResult:
+                 top_n: int = 5, n_vc: int = 0) -> EssenceResult:
         concepts = self._layer_rank("concept", query)[:n_concept]
 
         expanded: list = []
@@ -120,9 +126,16 @@ class Retriever:
         hit_pages = {s for s, _ in concepts} | set(entities)
         conflicts = [c for c in self.conflicts if hit_pages & set(c.affected)]
 
+        # VC is OFF by default (n_vc=0) — it is verification-purpose (often version-specific)
+        # and conflicts with the TC flow at generation; opt in explicitly for a verify pass.
+        vc = self.vcindex.rank(query, k=n_vc) if n_vc else []
+        docs = dict(self.docs)
+        for s, _ in vc:
+            docs[s] = self.vcindex.docs[s]            # so essence can render VC hits
+
         return EssenceResult(
             query=query, concepts=concepts, entities=entities, expanded=expanded,
-            conflicts=conflicts, top=top, docs=self.docs, dense_used=self.dense_used,
+            conflicts=conflicts, top=top, docs=docs, dense_used=self.dense_used, vc=vc,
         )
 
 
@@ -132,7 +145,8 @@ def _cached_retriever(wiki_root_str: str | None, use_dense: bool) -> Retriever:
 
 
 def retrieve(query: str, wiki_root=None, use_dense: bool = True,
-             n_concept: int = 3, n_entity: int = 5, top_n: int = 5) -> EssenceResult:
+             n_concept: int = 3, n_entity: int = 5, top_n: int = 5,
+             n_vc: int = 0) -> EssenceResult:
     """Convenience entry point with a cached Retriever per (wiki_root, use_dense)."""
     r = _cached_retriever(str(wiki_root) if wiki_root else None, use_dense)
-    return r.retrieve(query, n_concept=n_concept, n_entity=n_entity, top_n=top_n)
+    return r.retrieve(query, n_concept=n_concept, n_entity=n_entity, top_n=top_n, n_vc=n_vc)

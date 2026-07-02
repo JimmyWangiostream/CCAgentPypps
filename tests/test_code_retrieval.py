@@ -61,3 +61,32 @@ def test_render_includes_path_signature_and_rank():
 def test_empty_query_returns_nothing():
     assert retrieve_code("", SCRIPT_ROOT) == []
     assert retrieve_code("   ", SCRIPT_ROOT) == []
+
+
+class TestRenderAliasPrefix:
+    """Direct-mode candidates must show the scaffold-namespaced calling form
+    (same alias table as the prompt rule + the gate)."""
+
+    def _doc(self, **kw):
+        from code_retrieval.index import SymbolDoc
+        base = dict(name="set_flag", kind="func", path="api/ufs_api/rw.py",
+                    lineno=1, signature="set_flag(idn, index=...)")
+        base.update(kw)
+        return SymbolDoc(**base)
+
+    def test_api_func_prefixed(self):
+        assert "api.set_flag" in self._doc().render(1)
+
+    def test_cmd_seq_prefixed_execute_cmd(self):
+        d = self._doc(name="send", path="api/cmd_seq/executor.py",
+                      signature="send(timeout=...)")
+        assert "ExecuteCMD.send" in d.render()
+
+    def test_method_not_prefixed(self):
+        d = self._doc(kind="method", qualname="C.set_flag")
+        assert "api.C.set_flag" not in d.render()
+        assert "C.set_flag" in d.render()
+
+    def test_sample_code_not_prefixed(self):
+        d = self._doc(path="pattern/sample_code/wb.py")
+        assert "api.set_flag" not in d.render()

@@ -49,3 +49,11 @@ def test_prompt_has_checkpoints_rules_and_code():
 def test_prompt_demands_whole_file():
     p = build_review_prompt(SRC, IR)
     assert "COMPLETE corrected file" in p
+
+
+def test_prompt_carries_namespace_rule():
+    # The review/repair pass rewrites the WHOLE file; reference docs may quote
+    # stale/pattern-local alias prefixes -> the authoritative rule must ride along.
+    p = build_review_prompt(SRC, IR)
+    assert "Namespace rule (AUTHORITATIVE" in p
+    assert "AUTHORITATIVE for prefixes" in p      # the review-references caveat line

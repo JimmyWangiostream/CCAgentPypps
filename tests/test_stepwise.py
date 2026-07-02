@@ -557,3 +557,25 @@ class TestLoopWrapper:
         from pattern_generator.assemble import _parse_unit_methods, _derive_review_flags
         parsed = _parse_unit_methods(build_loop_wrapper_section(self._wrapper()))
         assert _derive_review_flags(parsed) == []
+
+
+class TestNamespaceRuleInjection:
+    """The namespace rule (module path -> scaffold alias) must ride BOTH unit-prompt
+    variants — it is the PREVENT half of the wrong-namespace gate rule."""
+
+    def test_gitnexus_instructions_carry_rule(self):
+        from pattern_generator.stepwise import UNIT_GEN_INSTRUCTIONS
+        assert "Namespace rule (AUTHORITATIVE" in UNIT_GEN_INSTRUCTIONS
+        assert "api.init_tester_to_unit_ready" in UNIT_GEN_INSTRUCTIONS
+        assert "Do NOT assume a naming prefix" not in UNIT_GEN_INSTRUCTIONS
+        assert "@@NAMESPACE_RULE@@" not in UNIT_GEN_INSTRUCTIONS
+
+    def test_direct_instructions_carry_rule(self):
+        from pattern_generator.stepwise import UNIT_GEN_INSTRUCTIONS_DIRECT
+        assert "Namespace rule (AUTHORITATIVE" in UNIT_GEN_INSTRUCTIONS_DIRECT
+        assert "@@NAMESPACE_RULE@@" not in UNIT_GEN_INSTRUCTIONS_DIRECT
+
+    def test_rule_names_logger_and_extra_imports(self):
+        from pattern_generator.stepwise import UNIT_GEN_INSTRUCTIONS
+        assert "`_log` does NOT exist" in UNIT_GEN_INSTRUCTIONS
+        assert "MUST be imported in === EXTRA IMPORTS ===" in UNIT_GEN_INSTRUCTIONS

@@ -25,15 +25,73 @@ in the package" and skip the signature check rather than cry wolf.
 from __future__ import annotations
 
 import ast
+import builtins
 import difflib
 import functools
 import re
+import sys
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 
 # Aliases the scaffold binds; only calls on these are checked.
 NAMESPACE_ALIASES = ("api", "ExecuteCMD", "lib")
+
+# ONE source of truth: defining-module path -> scaffold alias (first match wins).
+# Mirrors stepwise.STANDARD_IMPORTS (consistency enforced by a test).
+ALIAS_RULES = (("api/cmd_seq/", "ExecuteCMD"), ("api/", "api"), ("lib/", "lib"))
+# Names the scaffold itself binds (STANDARD_IMPORTS) — always-known in generated code.
+SCAFFOLD_NAMES = frozenset({"package_root", "api", "lib", "UFSTC", "logger", "ExecuteCMD"})
+# Deterministic bare-name resolution priority. Sound because api is a superset of the
+# api/ExecuteCMD overlap (cmd_seq is re-exported into api) and api/lib are disjoint.
+ALIAS_PRIORITY = ("api", "ExecuteCMD", "lib")
+# Where each alias's symbols live (used in finding messages so the fix is copy-paste).
+_ALIAS_HOME = {"api": "Script/api/**", "ExecuteCMD": "Script/api/cmd_seq/**",
+               "lib": "Script/lib/**"}
+
+
+def alias_for_path(rel_path) -> str | None:
+    """Scaffold alias for a Script-relative module path (None = not scaffold-bound).
+
+    Accepts 'api/ufs_api/initial_device.py', 'Script/api/...', backslashes, etc."""
+    p = str(rel_path).replace("\\", "/").lstrip("./")
+    if p.startswith("Script/"):
+        p = p[len("Script/"):]
+    for prefix, alias in ALIAS_RULES:
+        if p.startswith(prefix):
+            return alias
+    return None
+
+
+def resolve_bare_name(name: str, index: dict) -> str | None:
+    """Alias whose symbol table contains `name`, by ALIAS_PRIORITY; None if nowhere.
+
+    Only the re-export-reachable `symbols` tables count (a name buried in `all_names`
+    is not callable via the alias, so suggesting it would be wrong)."""
+    for alias in ALIAS_PRIORITY:
+        ns = index.get(alias)
+        if ns is not None and name in ns.symbols:
+            return alias
+    return None
+
+
+# Injected into every unit/wholefile prompt (stepwise/wholefile import it) AND enforced
+# by check_api_calls/check_bare_names — PREVENT and CATCH from this one table.
+NAMESPACE_RULE = """\
+## Namespace rule (AUTHORITATIVE — deterministic; the gate enforces it)
+The scaffold binds EXACTLY three Script namespaces. Prefix every Script symbol by
+where its `def`/`class` LIVES (its defining file path):
+  - Script/api/cmd_seq/**            -> ExecuteCMD.<name>
+  - Script/api/** (everything else)  -> api.<name>   (enums too: api.FlagIDN, api.Dcmd5ResetType)
+  - Script/lib/**                    -> lib.<name>
+Reference patterns/idioms use `from Script.api.ufs_api import *`, so they show BARE
+names (e.g. `init_tester_to_unit_ready(...)`). The scaffold has NO star import — you
+MUST re-prefix every bare symbol per its defining path (-> `api.init_tester_to_unit_ready(...)`).
+Never write a bare Script symbol and never guess a different prefix.
+Script/project_api/** and Script/pattern/** are NOT bound by the scaffold — to use one,
+add an explicit import in === EXTRA IMPORTS ===.
+Logging: the scaffold provides `logger` — use `logger.info/...`; `_log` does NOT exist.
+Stdlib modules you use (e.g. `time`) MUST be imported in === EXTRA IMPORTS ===."""
 
 
 @dataclass
@@ -48,6 +106,7 @@ class SigSpec:
     num_pos_required: int = 0       # leading positional params WITHOUT a default
     required_kwonly: set = field(default_factory=set)  # kw-only params without a default
     returns: str = ""               # return-type stem (inner of Optional/List/Union), if annotated
+    annotations: dict = field(default_factory=dict)    # param -> annotation source text
 
 
 @dataclass
@@ -87,11 +146,19 @@ def _resolve_relative(module_file: Path, level: int, parts: list) -> Path | None
 def _sig_from_args(args: ast.arguments, skip_self: bool) -> SigSpec:
     posonly = list(getattr(args, "posonlyargs", []))
     regular = list(args.args)
-    names = [a.arg for a in posonly + regular]
-    if skip_self and names:
-        names = names[1:]
+    pos_args = posonly + regular
+    if skip_self and pos_args:
+        pos_args = pos_args[1:]
+    names = [a.arg for a in pos_args]
     kwonly = [a.arg for a in args.kwonlyargs]
     params = set(names) | set(kwonly)
+    annotations = {}
+    for a in pos_args + list(args.kwonlyargs):
+        if a.annotation is not None:
+            try:
+                annotations[a.arg] = ast.unparse(a.annotation)
+            except Exception:
+                pass
     # Defaults bind to the TAIL of the positional list, so the leading
     # (len(names) - num_defaults) positional params are required.
     num_pos_required = max(0, len(names) - len(args.defaults))
@@ -107,6 +174,7 @@ def _sig_from_args(args: ast.arguments, skip_self: bool) -> SigSpec:
         pos_params=names,
         num_pos_required=num_pos_required,
         required_kwonly=required_kwonly,
+        annotations=annotations,
     )
 
 
@@ -141,27 +209,50 @@ def _class_sig(node: ast.ClassDef) -> SigSpec:
     return SigSpec(kind="class", has_kwargs=True, has_varargs=True)
 
 
-def _module_exports(module_file: Path, cache: dict, visiting: set) -> dict:
-    """Return {name: SigSpec} exported by a module, resolving `import *` chains.
+def _resolve_script_absolute(root: Path | None, module: str | None) -> Path | None:
+    """Resolve an absolute `Script.x.y` module name to a file under the Script root."""
+    if root is None or not module:
+        return None
+    parts = module.split(".")
+    if parts[0] != "Script" or len(parts) < 2:
+        return None
+    target = root.joinpath(*parts[1:])
+    if target.with_suffix(".py").is_file():
+        return target.with_suffix(".py")
+    init = target / "__init__.py"
+    return init if init.is_file() else None
 
+
+def _module_exports_ex(module_file: Path, cache: dict, visiting: set,
+                       root: Path | None = None) -> tuple:
+    """(exports, complete) for a module, mirroring Python's star-import semantics.
+
+    exports = {name: SigSpec} of every PUBLIC name the module namespace binds:
+    defs/classes/assigns, `import x` module bindings, by-name imports, and the
+    (underscore-filtered) merge of every resolvable `import *` — relative AND
+    absolute `Script.*` (when `root` is given). `complete` is False when any star
+    import could NOT be resolved (external lib, missing file, parse error) — i.e.
+    the export set may be missing names, so callers relying on it for bare-name
+    legality must suppress instead of flag (false-negative bias).
     Respects `__all__` when present. Cycle-safe via `visiting`."""
     key = str(module_file)
     if key in cache:
         return cache[key]
     if key in visiting:
-        return {}            # cycle — break
+        return {}, True      # cycle — break; the cycle owner accumulates the rest
     visiting.add(key)
 
     exports: dict = {}
+    complete = True
     dunder_all: set | None = None
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", SyntaxWarning)
-            tree = ast.parse(module_file.read_text(encoding="utf-8", errors="ignore"))
+            tree = ast.parse(module_file.read_text(encoding="utf-8-sig", errors="ignore"))
     except (OSError, SyntaxError):
         visiting.discard(key)
-        cache[key] = {}
-        return {}
+        cache[key] = ({}, False)
+        return {}, False
 
     for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -177,29 +268,53 @@ def _module_exports(module_file: Path, cache: dict, visiting: set) -> dict:
                         dunder_all = _literal_str_set(node.value)
                     else:
                         exports.setdefault(t.id, SigSpec(kind="name"))
-        elif isinstance(node, ast.ImportFrom) and node.level > 0:
-            parts = node.module.split(".") if node.module else []
-            target = _resolve_relative(module_file, node.level, parts)
-            if target is None:
-                continue
-            if any(a.name == "*" for a in node.names):
-                exports.update(_module_exports(target, cache, visiting))
+        elif isinstance(node, ast.Import):
+            # `import time` binds `time` in the module namespace — a star import of
+            # THIS module re-exports it (that is how real patterns get bare `time`).
+            for a in node.names:
+                exports.setdefault(a.asname or a.name.split(".")[0], SigSpec(kind="name"))
+        elif isinstance(node, ast.ImportFrom):
+            if node.level > 0:
+                parts = node.module.split(".") if node.module else []
+                target = _resolve_relative(module_file, node.level, parts)
             else:
-                sub = _module_exports(target, cache, visiting)
+                target = _resolve_script_absolute(root, node.module)
+            if any(a.name == "*" for a in node.names):
+                if target is None:
+                    complete = False        # unresolvable star — exports may be missing
+                    continue
+                # Python's star import skips underscore-prefixed names (barring __all__,
+                # which the sub-module's own export set already respects for its public
+                # names) — without this, private module vars like `_log` leak into the
+                # namespace model and bare `_log` gets "resolved" to `api._log`.
+                sub, sub_complete = _module_exports_ex(target, cache, visiting, root)
+                complete = complete and sub_complete
+                exports.update({n: s for n, s in sub.items() if not n.startswith("_")})
+            else:
+                sub = {}
+                if target is not None:
+                    sub, _c = _module_exports_ex(target, cache, visiting, root)
                 for a in node.names:
                     bound = a.asname or a.name
                     if a.name in sub:
                         exports[bound] = sub[a.name]
                     else:
-                        # importing a submodule or unresolved name; record existence
+                        # importing a submodule or unresolved name; the NAME is bound
+                        # regardless of resolvability — record existence
                         exports.setdefault(bound, SigSpec(kind="name"))
 
     if dunder_all is not None:
         exports = {n: s for n, s in exports.items() if n in dunder_all}
 
     visiting.discard(key)
-    cache[key] = exports
-    return exports
+    cache[key] = (exports, complete)
+    return exports, complete
+
+
+def _module_exports(module_file: Path, cache: dict, visiting: set,
+                    root: Path | None = None) -> dict:
+    """Back-compat wrapper over _module_exports_ex (exports dict only)."""
+    return _module_exports_ex(module_file, cache, visiting, root)[0]
 
 
 def _literal_str_set(value: ast.AST) -> set:
@@ -212,7 +327,11 @@ def _literal_str_set(value: ast.AST) -> set:
 
 
 def _walk_all_names(package_dir: Path) -> set:
-    """Every top-level def/class name anywhere under a package (fallback set)."""
+    """Every top-level def/class/constant name anywhere under a package (fallback set).
+
+    Module-level Assign targets count too: real patterns reference package constants
+    (`api.BLOCK4K_SIZE_128M_BYTE`, defined by assignment in api/.../constant_define.py)
+    — a def/class-only set would wrongly flag those as unknown/wrong-namespace."""
     names: set = set()
     if not package_dir.exists():
         return names
@@ -220,12 +339,16 @@ def _walk_all_names(package_dir: Path) -> set:
         try:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", SyntaxWarning)
-                tree = ast.parse(py.read_text(encoding="utf-8", errors="ignore"))
+                tree = ast.parse(py.read_text(encoding="utf-8-sig", errors="ignore"))
         except (OSError, SyntaxError):
             continue
         for node in tree.body:
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
                 names.add(node.name)
+            elif isinstance(node, ast.Assign):
+                names |= {t.id for t in node.targets if isinstance(t, ast.Name)}
+            elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                names.add(node.target.id)
     return names
 
 
@@ -240,11 +363,17 @@ _ENUM_BASES = {"IntEnum", "IntFlag", "Enum", "Flag", "StrEnum"}
 
 
 def render_sig(name: str, spec: "SigSpec") -> str:
-    """Readable real signature, e.g. `set_flag(idn, index=..., selector=...)`."""
-    parts = [p if i < spec.num_pos_required else f"{p}=..."
-             for i, p in enumerate(spec.pos_params)]
+    """Readable real signature, e.g. `set_flag(idn, index=..., selector=...)`.
+
+    Annotated params carry their real type (`write_record: list[list[WriteRecordNode]]`)
+    so the model copies the true container shape instead of guessing."""
+    def _p(p: str, required: bool) -> str:
+        ann = spec.annotations.get(p)
+        out = f"{p}: {ann}" if ann else p
+        return out if required else f"{out}=..."
+    parts = [_p(p, i < spec.num_pos_required) for i, p in enumerate(spec.pos_params)]
     for k in sorted(spec.params - set(spec.pos_params)):     # keyword-only params
-        parts.append(k if k in spec.required_kwonly else f"{k}=...")
+        parts.append(_p(k, k in spec.required_kwonly))
     if spec.has_varargs:
         parts.append("*args")
     if spec.has_kwargs:
@@ -268,7 +397,7 @@ def _build_struct_fields(root: Path) -> dict:
         try:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", SyntaxWarning)
-                tree = ast.parse(py.read_text(encoding="utf-8", errors="ignore"))
+                tree = ast.parse(py.read_text(encoding="utf-8-sig", errors="ignore"))
         except (OSError, SyntaxError):
             continue
         for node in tree.body:
@@ -345,7 +474,7 @@ def _build_enum_index(root: Path) -> dict:
         try:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", SyntaxWarning)
-                tree = ast.parse(py.read_text(encoding="utf-8", errors="ignore"))
+                tree = ast.parse(py.read_text(encoding="utf-8-sig", errors="ignore"))
         except (OSError, SyntaxError):
             continue
         for node in tree.body:
@@ -385,17 +514,17 @@ def build_script_index(script_root) -> dict | None:
     index: dict = {}
     if api_init.is_file():
         index["api"] = Namespace(
-            symbols=_module_exports(api_init, cache, set()),
+            symbols=_module_exports(api_init, cache, set(), root=root),
             all_names=_walk_all_names(root / "api"),
         )
     if cmdseq_init.is_file():
         index["ExecuteCMD"] = Namespace(
-            symbols=_module_exports(cmdseq_init, cache, set()),
+            symbols=_module_exports(cmdseq_init, cache, set(), root=root),
             all_names=_walk_all_names(root / "api" / "cmd_seq"),
         )
     if lib_file.is_file():
         index["lib"] = Namespace(
-            symbols=_module_exports(lib_file, cache, set()),
+            symbols=_module_exports(lib_file, cache, set(), root=root),
             all_names=_walk_all_names(root / "lib"),
         )
     index["_enums"] = _build_enum_index(root)   # not a namespace alias; see check_api_calls
@@ -403,6 +532,7 @@ def build_script_index(script_root) -> dict | None:
     index["_structs"] = structs
     index["_all_struct_fields"] = (
         frozenset().union(*structs.values()) if structs else frozenset())
+    index["_root"] = str(root)                  # for star-import resolution (check_bare_names)
     return index
 
 
@@ -480,7 +610,9 @@ def api_facts(script_root, symbol_names=(), query: str = "", max_enums: int = 8)
                 scored.append((len(overlap), ename, members))
         scored.sort(key=lambda x: (-x[0], x[1]))
         for _, ename, members in scored[:max_enums]:
-            facts.append(f"{ename} valid members: {', '.join(sorted(members))}")
+            owner = resolve_bare_name(ename, index)
+            shown = f"{owner}.{ename}" if owner else ename
+            facts.append(f"{shown} valid members: {', '.join(sorted(members))}")
     return facts
 
 
@@ -488,17 +620,42 @@ def api_facts(script_root, symbol_names=(), query: str = "", max_enums: int = 8)
 # Public: check a generated source against the index
 # ---------------------------------------------------------------------------
 
+def _membership_issue(alias: str, name: str, index: dict, lineno: int,
+                      is_call: bool) -> dict:
+    """Issue for `alias.name` absent from alias's namespace: `wrong_namespace` when the
+    symbol unambiguously lives under ANOTHER scaffold alias (detail = the exact fix, so
+    the repair prompt carries the resolution, not just the error), else `unknown_symbol`."""
+    other = resolve_bare_name(name, index)
+    if other and other != alias:
+        form = f"{other}.{name}(...)" if is_call else f"{other}.{name}"
+        return {"alias": alias, "symbol": name, "kind": "wrong_namespace",
+                "detail": (f"{alias}.{name} — this symbol lives under "
+                           f"{_ALIAS_HOME[other]}; write {form}"),
+                "line": lineno}
+    issue = {"alias": alias, "symbol": name, "kind": "unknown_symbol",
+             "detail": f"{alias}.{name} not found in Script", "line": lineno}
+    ns = index.get(alias)
+    near = difflib.get_close_matches(name, ns.symbols.keys(), n=1, cutoff=0.7) if ns else []
+    if near:
+        issue["suggestion"] = near[0]
+    return issue
+
+
 def check_api_calls(py_source: str, index: dict) -> list:
-    """Return a list of issue dicts for namespace calls that don't match Script.
+    """Return a list of issue dicts for namespace usage that doesn't match Script.
 
     Each issue: {alias, symbol, kind, detail, line, [suggestion]}.
-    kind in {"unknown_symbol", "unknown_kwarg", "too_many_positional"}."""
+    kind in {"unknown_symbol", "wrong_namespace", "unknown_kwarg",
+    "too_many_positional", "missing_required_arg", "unknown_enum_member"}.
+    Covers `alias.X(...)` calls AND non-call `alias.X` attribute access (so a
+    wrong-prefix enum like `lib.Dcmd5ResetType.HW_RESET` is caught too)."""
     try:
         tree = ast.parse(py_source)
     except SyntaxError:
         return []          # syntax errors are reported separately by validate()
 
     issues: list = []
+    checked_funcs: set = set()   # id() of alias-Attribute nodes handled as call funcs
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
@@ -508,18 +665,14 @@ def check_api_calls(py_source: str, index: dict) -> list:
         alias = func.value.id
         if alias not in NAMESPACE_ALIASES or alias not in index:
             continue
+        checked_funcs.add(id(func))
         ns = index[alias]
         name = func.attr
 
         if name not in ns.symbols:
             if name in ns.all_names:
                 continue   # exists somewhere; resolver just didn't reach it — skip
-            issue = {"alias": alias, "symbol": name, "kind": "unknown_symbol",
-                     "detail": f"{alias}.{name} not found in Script", "line": node.lineno}
-            near = difflib.get_close_matches(name, ns.symbols.keys(), n=1, cutoff=0.7)
-            if near:
-                issue["suggestion"] = near[0]
-            issues.append(issue)
+            issues.append(_membership_issue(alias, name, index, node.lineno, is_call=True))
             continue
 
         spec = ns.symbols[name]
@@ -568,6 +721,22 @@ def check_api_calls(py_source: str, index: dict) -> list:
                                f"{', '.join(missing)}" + realsig),
                     "line": node.lineno,
                 })
+
+    # Non-call alias attribute access (`lib.Dcmd5ResetType.HW_RESET`, `api.SOME_CONST`) —
+    # the wrong prefix on an attribute chain was previously never questioned.
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)):
+            continue
+        if id(node) in checked_funcs:
+            continue                       # already validated as a call above
+        alias = node.value.id
+        if alias not in NAMESPACE_ALIASES or alias not in index:
+            continue
+        ns = index[alias]
+        name = node.attr
+        if name in ns.symbols or name in ns.all_names:
+            continue
+        issues.append(_membership_issue(alias, name, index, node.lineno, is_call=False))
 
     issues += _check_enum_usage(tree, index.get("_enums", {}))
     return issues
@@ -636,7 +805,7 @@ def _all_script_names(script_root_str: str) -> frozenset:
         try:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", SyntaxWarning)
-                tree = ast.parse(py.read_text(encoding="utf-8", errors="ignore"))
+                tree = ast.parse(py.read_text(encoding="utf-8-sig", errors="ignore"))
         except (OSError, SyntaxError):
             continue
         for node in ast.walk(tree):
@@ -774,6 +943,182 @@ def check_struct_fields(py_source: str, index: dict) -> list:
             if near:
                 issue["suggestion"] = near[0]
             issues.append(issue)
+    return issues
+
+
+# ---------------------------------------------------------------------------
+# Public: bare/undefined-name check — closes the blind spot that let a BARE
+# `init_tester_to_unit_ready(...)` (copied from a star-importing reference pattern)
+# and `_log.info(...)` produce ZERO findings: check_api_calls only inspects
+# `alias.attr(...)`. PREVENT half = NAMESPACE_RULE (same table).
+# ---------------------------------------------------------------------------
+
+_BUILTIN_NAMES = frozenset(dir(builtins))
+
+
+def _bound_names_from_import(node) -> set:
+    """Names an import statement binds (asname-aware; `*` handled by the caller)."""
+    out: set = set()
+    if isinstance(node, ast.Import):
+        for a in node.names:
+            out.add(a.asname or a.name.split(".")[0])
+    elif isinstance(node, ast.ImportFrom):
+        for a in node.names:
+            if a.name != "*":
+                out.add(a.asname or a.name)
+    return out
+
+
+def _star_import_exports(node: ast.ImportFrom, root: Path, cache: dict) -> set | None:
+    """Names bound by `from Script.x.y import *`; None when unresolvable OR incomplete.
+
+    Incomplete = the module (or anything it transitively star-imports) contains a
+    star import we could not resolve — its export set may be missing names, so the
+    caller must suppress the whole bare-name check rather than flag on a partial
+    picture (false-negative bias)."""
+    if node.level:                 # relative — never emitted by generated/real patterns
+        return None
+    f = _resolve_script_absolute(root, node.module or "")
+    if f is None:
+        return None
+    exports, complete = _module_exports_ex(f, cache, set(), root)
+    if not complete or not exports:
+        return None
+    return set(exports)
+
+
+def _bare_issue(name: str, lineno: int, index: dict, is_call: bool) -> dict:
+    """Issue for a bare name that is not in scope. Detail = the deterministic fix.
+
+    Stdlib module names win over alias resolution: some Script modules `import time`
+    at top level (making `api.time` technically reachable via star re-export), but
+    the RIGHT fix for a bare `time` is always `import time`, never `api.time`."""
+    if name in sys.stdlib_module_names and not is_call:
+        return {"alias": "", "symbol": name, "kind": "undefined_name",
+                "detail": (f"name '{name}' is undefined — add 'import {name}' to "
+                           f"=== EXTRA IMPORTS ==="), "line": lineno}
+    alias = resolve_bare_name(name, index)
+    if alias:
+        form = f"{alias}.{name}(...)" if is_call else f"{alias}.{name}"
+        return {"alias": alias, "symbol": name, "kind": "bare_name",
+                "detail": (f"bare name '{name}' — the scaffold has no star import; "
+                           f"write {form} (defined under {_ALIAS_HOME[alias]})"),
+                "line": lineno}
+    if name in sys.stdlib_module_names:
+        return {"alias": "", "symbol": name, "kind": "undefined_name",
+                "detail": (f"name '{name}' is undefined — add 'import {name}' to "
+                           f"=== EXTRA IMPORTS ==="), "line": lineno}
+    issue = {"alias": "", "symbol": name, "kind": "undefined_name",
+             "detail": (f"name '{name}' is not defined (not a local, import, "
+                        f"scaffold name, or Script symbol)"), "line": lineno}
+    if name in ("_log", "log"):
+        issue["suggestion"] = "logger"
+    else:
+        near = difflib.get_close_matches(name, sorted(SCAFFOLD_NAMES), n=1, cutoff=0.7)
+        if near:
+            issue["suggestion"] = near[0]
+    return issue
+
+
+def check_bare_names(py_source: str, index: dict, extra_imports=()) -> list:
+    """Flag bare Script symbols and undefined names in function bodies.
+
+    kind `bare_name`: the name resolves (via ALIAS_PRIORITY) to a scaffold namespace —
+    the model copied a star-import idiom verbatim; the detail says the prefixed form.
+    kind `undefined_name`: resolves nowhere — `_log` (suggest `logger`), a missing
+    stdlib import (`time` -> "add 'import time'"), or a genuine typo.
+
+    Conservative scope model (false-negative bias): builtins + SCAFFOLD_NAMES +
+    self/cls + every module-level binding + all import statements anywhere in the
+    source + `extra_imports` lines + per-function locals (params of the function AND
+    anything nested, every Name-Store target, nested def/class names, global/nonlocal,
+    except-handler names). `from Script.x import *` is resolved to its real exports via
+    the index's script root; ANY unresolvable `import *` suppresses the whole check.
+    Works on fragments (unit methods wrapped in a dummy class) and whole files alike.
+    One finding per name (first occurrence)."""
+    if not index:
+        return []
+    try:
+        tree = ast.parse(py_source)
+    except SyntaxError:
+        return []
+
+    root_str = index.get("_root", "")
+    root = Path(root_str) if root_str else None
+    cache: dict = {}
+    known: set = set(_BUILTIN_NAMES) | set(SCAFFOLD_NAMES) | {"self", "cls"}
+
+    # Imports: anywhere in the source (function-level imports over-approximate to
+    # file scope — false-negative direction) + the unit's EXTRA IMPORTS lines.
+    import_nodes = [n for n in ast.walk(tree) if isinstance(n, (ast.Import, ast.ImportFrom))]
+    for line in extra_imports or ():
+        try:
+            sub = ast.parse(str(line))
+        except SyntaxError:
+            continue
+        import_nodes.extend(n for n in sub.body if isinstance(n, (ast.Import, ast.ImportFrom)))
+    for n in import_nodes:
+        known |= _bound_names_from_import(n)
+        if isinstance(n, ast.ImportFrom) and any(a.name == "*" for a in n.names):
+            exports = _star_import_exports(n, root, cache) if root else None
+            if exports is None:
+                return []      # unresolvable star import — bare names may be legal; stay silent
+            known |= exports
+
+    for n in tree.body:        # module-level bindings
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            known.add(n.name)
+        elif isinstance(n, ast.Assign):
+            known |= {t.id for t in n.targets if isinstance(t, ast.Name)}
+        elif isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name):
+            known.add(n.target.id)
+
+    funcs = [n for n in ast.walk(tree)
+             if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    nested: set = set()
+    for f in funcs:
+        for sub in ast.walk(f):
+            if sub is not f and isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                nested.add(id(sub))
+
+    issues: list = []
+    reported: set = set()
+    for fn in funcs:
+        if id(fn) in nested:
+            continue           # checked as part of its enclosing function
+        local = set(known)
+        for sub in ast.walk(fn):
+            if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                local.add(sub.name)
+                a = sub.args
+                for arg in (list(getattr(a, "posonlyargs", [])) + list(a.args)
+                            + list(a.kwonlyargs)):
+                    local.add(arg.arg)
+                if a.vararg:
+                    local.add(a.vararg.arg)
+                if a.kwarg:
+                    local.add(a.kwarg.arg)
+            elif isinstance(sub, ast.ClassDef):
+                local.add(sub.name)
+            elif isinstance(sub, ast.Name) and isinstance(sub.ctx, (ast.Store, ast.Del)):
+                local.add(sub.id)
+            elif isinstance(sub, (ast.Global, ast.Nonlocal)):
+                local.update(sub.names)
+            elif isinstance(sub, ast.ExceptHandler) and sub.name:
+                local.add(sub.name)
+
+        for sub in ast.walk(fn):
+            if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name):
+                nm = sub.func.id
+                if nm not in local and nm not in reported:
+                    reported.add(nm)
+                    issues.append(_bare_issue(nm, sub.lineno, index, is_call=True))
+            elif (isinstance(sub, ast.Attribute) and isinstance(sub.value, ast.Name)
+                  and isinstance(sub.value.ctx, ast.Load)):
+                nm = sub.value.id
+                if nm not in local and nm not in reported:
+                    reported.add(nm)
+                    issues.append(_bare_issue(nm, sub.lineno, index, is_call=False))
     return issues
 
 

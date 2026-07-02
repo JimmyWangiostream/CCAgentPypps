@@ -1,3 +1,8 @@
+import re
+import sys
+
+import pytest
+
 from pattern_generator.rules import select_refs, format_refs, all_ref_names
 
 
@@ -45,3 +50,35 @@ def test_format_includes_stem_and_body():
 
 def test_format_empty():
     assert "no matching review references" in format_refs([])
+
+
+def test_review_refs_use_canonical_alias_prefixes():
+    """Pollution lint: a review_refs doc must never quote a Script symbol under a
+    NON-scaffold alias (the `idv.init_tester_to_unit_ready` incident — a hallucinated
+    prefix baked into a committed doc, copied verbatim into repair prompts, teaching
+    the model wrong prefixes). Flags `X.symbol(` where X is not api/ExecuteCMD/lib
+    (nor self/cls/a stdlib module) but `symbol` resolves to a scaffold namespace —
+    such a form is never legitimate, not even as a 'before' example."""
+    from pattern_generator.api_grounding import (
+        NAMESPACE_ALIASES, build_script_index, resolve_bare_name,
+    )
+    from pattern_generator.config import PGConfig
+    from pattern_generator.rules import REFS_DIR
+
+    index = build_script_index(PGConfig().script_root)
+    if not index:
+        pytest.skip("Script library not present")
+
+    ok_bases = set(NAMESPACE_ALIASES) | {"self", "cls"} | set(sys.stdlib_module_names)
+    call_re = re.compile(r"\b([A-Za-z_]\w*)\.([A-Za-z_]\w*)\s*\(")
+    offenders: list = []
+    for md in sorted(REFS_DIR.glob("*.md")):
+        text = md.read_text(encoding="utf-8", errors="ignore")
+        for m in call_re.finditer(text):
+            base, symbol = m.group(1), m.group(2)
+            if base in ok_bases:
+                continue
+            alias = resolve_bare_name(symbol, index)
+            if alias:
+                offenders.append(f"{md.name}: '{base}.{symbol}(' — write {alias}.{symbol}(...)")
+    assert not offenders, "non-canonical alias prefix in review_refs:\n" + "\n".join(offenders)

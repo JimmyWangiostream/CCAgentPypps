@@ -18,6 +18,8 @@ import warnings
 from dataclasses import dataclass
 from pathlib import Path
 
+from pattern_generator.api_grounding import alias_for_path
+
 # Split a CamelCase / snake_case / digit-joined identifier into its word parts so
 # a natural-language query ("TEST UNIT READY") matches a compound symbol name
 # ("TestUnitReady") under the word-level BM25 tokenizer.
@@ -65,9 +67,18 @@ class SymbolDoc:
         return f"{self.display} {self.name} {name_words} {path_words} {self.signature} {doc_head}"
 
     def render(self, rank: int | None = None) -> str:
-        """One-line candidate / CODE REFS form: 'path: Symbol — signature [(script rankN)]'."""
+        """One-line candidate / CODE REFS form: 'path: [alias.]Symbol — signature [(script rankN)]'.
+
+        Top-level symbols under a scaffold-bound tree carry their calling alias
+        (api./ExecuteCMD./lib. — same table the prompt's NAMESPACE RULE and the gate
+        use), so the candidate line already shows the correct namespaced form."""
         tag = f" (script rank{rank})" if rank else ""
-        return f"{self.path}: {self.display} — {self.signature}{tag}"
+        shown = self.display
+        if self.kind in ("func", "class") and self.qualname in ("", self.name):
+            alias = alias_for_path(self.path)
+            if alias:
+                shown = f"{alias}.{self.name}"
+        return f"{self.path}: {shown} — {self.signature}{tag}"
 
 
 def _render_signature(name: str, args: ast.arguments, skip_self: bool) -> str:

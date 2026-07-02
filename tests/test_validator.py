@@ -57,6 +57,17 @@ def test_structure_passes_well_formed():
     assert out["dataflow"] == "pass"
 
 
+def test_structure_flags_unplanned_stepN():
+    # An extra step3 not in the unit plan (SEQ_IR -> step1, step2) is drift.
+    src = GOOD.replace(
+        "    def step2(self) -> None:\n        x = self.max_lba\n",
+        "    def step2(self) -> None:\n        x = self.max_lba\n"
+        "    def step3(self) -> None:\n        pass\n")
+    out = validate(src, SEQ_IR)
+    assert out["structure"] != "pass"
+    assert any("unplanned stepN method 'step3'" in i for i in out["structure"])
+
+
 def test_structure_catches_methods_outside_class():
     """The #1 catastrophic bug: stepN methods land outside the class / after the
     __main__ guard. Parses fine, but process() runs nothing."""
@@ -225,3 +236,76 @@ def test_api_grounding_passes_for_good_call(tmp_path):
     out = validate("api.random_read(cmd_count=1, min_lun=0, max_lun=0)\n",
                    NOLOOP_IR, script_root=root)
     assert out["api_grounding"] == "pass"
+
+
+# ---------------------------------------------------------------------------
+# structure: duplicate defs + loop-helper arity
+# ---------------------------------------------------------------------------
+
+def test_structure_flags_duplicate_method():
+    src = GOOD.replace(
+        "\nif __name__",
+        "    def post_process(self) -> None:\n"
+        "        pass\n"
+        "    def post_process(self) -> None:\n"
+        "        pass\n"
+        "\nif __name__")
+    out = validate(src, SEQ_IR)
+    assert out["structure"] != "pass"
+    assert any("'post_process' defined more than once" in m for m in out["structure"])
+
+
+def test_structure_flags_loop_helper_missing_loop_idx():
+    src = (
+        "class P(UFSTC):\n"
+        "    def _loop1_step_1_1(self) -> None:\n"     # missing loop_idx
+        "        pass\n"
+        "    def step1(self) -> None:\n"
+        "        for loop_idx in range(50):\n"
+        "            self._loop1_step_1_1(loop_idx)\n"
+    )
+    out = validate(src, LOOP_IR)
+    assert out["structure"] != "pass"
+    assert any("must have signature (self, loop_idx)" in m for m in out["structure"])
+
+
+# ---------------------------------------------------------------------------
+# bare names in the whole-file gate + mypy hint enrichment
+# ---------------------------------------------------------------------------
+
+def test_api_grounding_flags_bare_star_import_idiom(tmp_path):
+    # a bare reference-pattern idiom in a scaffold-style file (no star import)
+    root = _mini_script(tmp_path / "Script")
+    src = ("class P(UFSTC):\n"
+           "    def step1(self) -> None:\n"
+           "        random_read(cmd_count=1, min_lun=0, max_lun=0)\n")
+    out = validate(src, NOLOOP_IR, script_root=root)
+    assert out["api_grounding"] != "pass"
+    assert any("write api.random_read(...)" in m for m in out["api_grounding"])
+
+
+def test_api_grounding_bare_legal_under_star_import(tmp_path):
+    # the SAME bare call is legal when the file itself star-imports the module
+    root = _mini_script(tmp_path / "Script")
+    src = ("from Script.api.funcs import *\n"
+           "class P(UFSTC):\n"
+           "    def step1(self) -> None:\n"
+           "        random_read(cmd_count=1, min_lun=0, max_lun=0)\n")
+    out = validate(src, NOLOOP_IR, script_root=root)
+    assert out["api_grounding"] == "pass"
+
+
+def test_enrich_mypy_names_appends_resolutions(tmp_path):
+    from pattern_generator.validator import _enrich_mypy_names
+    root = _mini_script(tmp_path / "Script")
+    errs = [
+        'x.py:5: error: Name "random_read" is not defined  [name-defined]',
+        'x.py:7: error: Name "_log" is not defined  [name-defined]',
+        'x.py:9: error: Name "time" is not defined  [name-defined]',
+        'x.py:11: error: Incompatible types in assignment  [assignment]',
+    ]
+    out = _enrich_mypy_names(errs, root)
+    assert "[hint: write api.random_read — see the namespace rule]" in out[0]
+    assert "[hint: use the scaffold's 'logger']" in out[1]
+    assert "[hint: add 'import time']" in out[2]
+    assert out[3] == errs[3]                    # non-name errors untouched

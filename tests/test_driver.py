@@ -68,3 +68,11 @@ def test_repair_prompt_without_failures_is_just_review():
     prompt = build_repair_prompt(GOOD, IR, g["report"])
     assert "Validator findings" not in prompt
     assert "Checkpoints" in prompt
+
+
+def test_repair_prompt_carries_namespace_rule():
+    # the `idv.` incident: a reference doc's stale prefix steered the repair round
+    # into `lib.init_tester_to_unit_ready` — the repair prompt must carry the rule.
+    g = run_gate(BAD, IR)
+    prompt = build_repair_prompt(BAD, IR, g["report"])
+    assert "Namespace rule (AUTHORITATIVE" in prompt

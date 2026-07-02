@@ -126,7 +126,7 @@ def _unit_code(unit: dict, script_root, k: int = 3) -> list:
     return [r.render() for r in retrieve_code(query, script_root, k=k)]
 
 
-def _unit_api_facts(unit: dict, script_root, k: int = 5) -> list:
+def _unit_api_facts(unit: dict, script_root, version=None, k: int = 5) -> list:
     """Phase B: deterministic exact-signature + enum facts for this unit (both modes).
 
     Resolve the unit's likely symbols (same code index as _unit_code) and look up
@@ -134,18 +134,30 @@ def _unit_api_facts(unit: dict, script_root, k: int = 5) -> list:
     — the same index the validator checks against. Injected so the model copies the
     real form instead of guessing. Empty if script_root isn't a Script library.
 
-    NOTE: these are HEURISTIC (code_retrieval may surface sibling/wrong-layer symbols)
-    so they ride the mode-aware authority block. The canonical idioms (always
-    authoritative) are returned SEPARATELY by `_unit_canonical` — do not merge."""
-    from pattern_generator.api_grounding import api_facts
+    The candidate list is deterministically refined by capability_resolver:
+      * version_gate DROPS a candidate whose return struct is unavailable on the target
+        UFS `version` (e.g. get_extended_write_booster_support = 4.1-only on a 3.1 run) —
+        so the wrong sibling can't be copied;
+      * the accessors a canonical idiom names are FORCE-FED (prepended) so the CORRECT
+        accessor's real signature + struct fields (incl u8_write_booster) are injected as
+        a concrete anchor, not just idiom prose. This is the fix for the Hermes WB bug.
+    The remaining symbols stay HEURISTIC (ride the mode-aware authority block)."""
+    from pattern_generator.api_grounding import api_facts, _cached_index
+    from pattern_generator.capability_resolver import canonical_symbols, version_gate
     from code_retrieval.retrieve import retrieve_code
     query = _unit_code_query(unit).strip()
     if not query:
         return []
     try:
-        names = tuple(r.doc.name for r in retrieve_code(query, script_root, k=k))
+        names = [r.doc.name for r in retrieve_code(query, script_root, k=k)]
     except Exception:
-        names = ()
+        names = []
+    index = _cached_index(str(script_root))
+    if index and version:
+        names, _dropped = version_gate(index, names, version)
+    # Force-feed the canonical idiom's accessor(s) so their real fields anchor the model.
+    canon = canonical_symbols(_unit_canonical(unit))
+    names = list(dict.fromkeys(canon + names))
     return api_facts(script_root, names, query)
 
 
@@ -158,6 +170,23 @@ def _unit_canonical(unit: dict) -> list:
     e.g. 'wb support', fires the rule even when the step name is Chinese)."""
     from pattern_generator.semantic_checks import canonical_facts
     return canonical_facts(_unit_code_query(unit))
+
+
+def _unit_procedures(unit: dict) -> list:
+    """Procedure-idiom guards for this unit (procedure_idioms.match_procedures) — fired off
+    the data-flow-enriched query so var names like 'test_lun'/'max_capacity' trigger them."""
+    from pattern_generator.procedure_idioms import match_procedures
+    return match_procedures(_unit_code_query(unit))
+
+
+def _target_version(ir: dict, config: PGConfig) -> str | None:
+    """Resolved target UFS version for this run: TC frontmatter `ufs_version` > wiki/target.md.
+
+    Threaded into every unit prompt (and, later, the resolver/validator version gate) so a
+    version-unavailable API (e.g. 4.1-only get_extended_write_booster_support) is excludable
+    deterministically instead of guessed."""
+    from pattern_generator.ufs_version import resolve
+    return resolve(ir, config.wiki_path)
 
 
 def _resolve_grounding_mode(run_dir: Path, config: PGConfig) -> str:
@@ -267,7 +296,7 @@ def prepare_pattern(ir_path, config: PGConfig | None = None) -> dict:
         wiki = _unit_wiki(first_unit, config.wiki_path)
         code_candidates = (_unit_code(first_unit, config.script_root)
                            if config.grounding_mode == "direct" else None)
-        facts = _unit_api_facts(first_unit, config.script_root)
+        facts = _unit_api_facts(first_unit, config.script_root, version=_target_version(ir, config))
         canonical = _unit_canonical(first_unit)
         defaults_text, md_stem = _unit_defaults(first_unit, config.wiki_path)
         prompt = build_one_unit_prompt(
@@ -279,6 +308,8 @@ def prepare_pattern(ir_path, config: PGConfig | None = None) -> dict:
             api_facts=facts,
             canonical_facts=canonical,
             defaults=defaults_text,
+            ufs_version=_target_version(ir, config),
+            procedures=_unit_procedures(first_unit),
         )
         first_prompt_file = _unit_prompt_filename(first_unit)
         run.write_text(first_prompt_file, prompt)
@@ -348,8 +379,22 @@ def prepare_unit(run_dir, unit_index: int, config: PGConfig | None = None) -> di
             from pattern_generator.assemble import _parse_unit_methods
             from pattern_generator.unit_gate import check_unit, unit_findings
             pu = _parse_unit_methods(prev_mf.read_text(encoding="utf-8", errors="ignore"))
-            findings = unit_findings(check_unit(pu.methods, code_refs=pu.code_refs,
-                                                script_root=cfg.script_root))
+            # A unit may legitimately use a name imported by an EARLIER unit (assemble
+            # merges all EXTRA IMPORTS) — give the bare-name check the upstream union.
+            upstream_imports: list = list(pu.extra_imports)
+            for f in sorted(run_dir.glob("unit_*_methods.py")):
+                try:
+                    nn = int(f.name.split("_", 2)[1])
+                except (IndexError, ValueError):
+                    continue
+                if nn < unit_index and f != prev_mf:
+                    upstream_imports.extend(_parse_unit_methods(
+                        f.read_text(encoding="utf-8", errors="ignore")).extra_imports)
+            findings = unit_findings(check_unit(
+                pu.methods, code_refs=pu.code_refs, script_root=cfg.script_root,
+                expected_methods=[prev["method"]] if prev.get("method") else None,
+                extra_imports=upstream_imports,
+                loop_idx_required=bool(prev.get("loop_idx_param"))))
             if findings:
                 upstream_gate = (
                     f"## FIX UPSTREAM UNIT FIRST — {prev_mf.name} failed the per-unit gate\n"
@@ -361,7 +406,7 @@ def prepare_unit(run_dir, unit_index: int, config: PGConfig | None = None) -> di
     mode = _resolve_grounding_mode(run_dir, cfg)
     wiki = _unit_wiki(unit, cfg.wiki_path)
     code_candidates = (_unit_code(unit, cfg.script_root) if mode == "direct" else None)
-    facts = _unit_api_facts(unit, cfg.script_root)
+    facts = _unit_api_facts(unit, cfg.script_root, version=_target_version(ir, cfg))
     canonical = _unit_canonical(unit)
     defaults_text, md_stem = _unit_defaults(unit, cfg.wiki_path)
     prompt = build_one_unit_prompt(
@@ -376,6 +421,8 @@ def prepare_unit(run_dir, unit_index: int, config: PGConfig | None = None) -> di
         api_facts=facts,
         canonical_facts=canonical,
         defaults=defaults_text,
+        ufs_version=_target_version(ir, cfg),
+        procedures=_unit_procedures(unit),
     )
     fname = _unit_prompt_filename(unit)
     (run_dir / fname).write_text(upstream_gate + prompt, encoding="utf-8")

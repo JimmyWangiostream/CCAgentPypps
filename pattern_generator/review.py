@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 
+from pattern_generator.api_grounding import NAMESPACE_RULE
 from pattern_generator.rules import select_refs, format_refs
 
 
@@ -70,10 +71,16 @@ comment `# REVIEW: no defects found`. Do not output a diff or partial methods.""
 
 def build_review_prompt(pattern_src: str, ir: dict, refs=None, defaults: str = "",
                         tc_flow: str = "") -> str:
-    """Assemble the review prompt: instructions + checkpoints + references + TC flow + code."""
+    """Assemble the review prompt: instructions + checkpoints + references + TC flow + code.
+
+    The NAMESPACE_RULE rides here too: the review/repair pass rewrites the WHOLE file,
+    and reference docs may quote code with stale/pattern-local alias prefixes — without
+    the authoritative rule the model copies whatever prefix a reference happens to show
+    (the `idv.` -> `lib.init_tester_to_unit_ready` incident)."""
     refs = refs if refs is not None else select_refs(pattern_src, _ir_terms(ir))
 
     parts = [REVIEW_INSTRUCTIONS,
+             NAMESPACE_RULE,
              f"Pattern: {ir.get('pattern_id')} — {ir.get('title', '')}"]
 
     if defaults.strip():
@@ -95,7 +102,16 @@ def build_review_prompt(pattern_src: str, ir: dict, refs=None, defaults: str = "
             lines.append(row)
         parts.append("\n".join(lines))
 
-    parts.append("## Review references (pitfalls — fix every violation)\n" + format_refs(refs))
+    parts.append("## Review references (pitfalls — fix every violation)\n"
+                 "(code snippets in these reference docs may show stale or pattern-local "
+                 "alias prefixes — the Namespace rule above is AUTHORITATIVE for prefixes)\n"
+                 + format_refs(refs))
+
+    # NOTE: Verification Criteria (VC) are deliberately NOT injected here. VC are
+    # verification-purpose specs (often version-specific, e.g. a UFS 4.1 VC) and conflict
+    # with the TC flow the pattern must implement; the TC's own Expected is the single
+    # assertion authority. VC belong to a separate verification pass, not generation/review.
+    # (wiki_retrieval.vc is retained for that future pass.)
 
     if tc_flow.strip():
         parts.append("## Normalized test flow (the code must implement every step in order)\n"

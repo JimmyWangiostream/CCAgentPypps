@@ -50,7 +50,7 @@ PC=0x01+start=0x01 = START only. Power cycle = STOP (0,0) + power-down + START.
 # BAD: manual bytearray + vendor cmd
 desc_data = bytearray(0x40)
 desc_data[0x00] = 0x01
-resp = vf.modify_desc_attr_flag(QuerryType=ed.Vendor_CMD_Query_Func.VENDOR_CMD_QUERY_DESCRIPTOR, ...)
+resp = api.modify_desc_attr_flag(QuerryType=api.Vendor_CMD_Query_Func.VENDOR_CMD_QUERY_DESCRIPTOR, ...)
 ```
 Use `api.ConfigDescriptor410()` + `ExecuteCMD.WriteDescriptor()` + `cmd.set_desc()` instead.
 

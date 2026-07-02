@@ -3,6 +3,8 @@ No LLM, no code retrieval — grounding is done on demand by the generating mode
 import json
 from pathlib import Path
 
+from pattern_generator.api_grounding import NAMESPACE_RULE
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TEMPLATE_REL = "pattern_template_wizard/pattern_template.py"
 
@@ -341,6 +343,8 @@ STANDARD IMPORTS ALREADY IN SCAFFOLD (do NOT repeat):
   from Script.pattern.pattern_logger import logger
   import Script.api.cmd_seq as ExecuteCMD
 
+@@NAMESPACE_RULE@@
+
 STRUCTURE RULES:
 - This unit MUST become EXACTLY ONE method. See "STRUCTURE (this unit)" below for the
   exact method name/signature and whether it is a stepN method or a loop helper.
@@ -352,13 +356,17 @@ STRUCTURE RULES:
   any unresolved API write:
     logger.warning("TODO human-confirm: <what is unresolved>")
     # TODO human-confirm: <symbol or operation that needs verification>
+- Do NOT substitute a name-similar SINGLE API for a multi-step PROCEDURE (e.g. selecting the
+  max-capacity LUN is enumerate→read→pick, not `get_max_number_of_lun()`). If no grounded API
+  implements the intent, emit the TODO human-confirm above — never fabricate a value/derivation.
 - Reuse helper methods already defined upstream (listed below); do NOT redefine them.
 
 GROUNDING (MANDATORY before writing any API call):
   CODE  → Use the gitnexus MCP server (it has indexed the Script/ codebase):
            call the `query` tool with DOMAIN KEYWORDS to get the top-5 candidate
            symbols; use `context` to confirm a symbol's callers/callees and real
-           signature before writing the call. Do NOT assume a naming prefix.
+           signature before writing the call. Prefix per the NAMESPACE RULE above
+           (deterministic — derived from the symbol's defining path).
            Script/ layout — pick the right folder:
              - Script/project_api/ : this project's CUSTOMER api — prefer for
                                      customer-specific behaviour.
@@ -453,6 +461,8 @@ STANDARD IMPORTS ALREADY IN SCAFFOLD (do NOT repeat):
   from Script.pattern.pattern_logger import logger
   import Script.api.cmd_seq as ExecuteCMD
 
+@@NAMESPACE_RULE@@
+
 STRUCTURE RULES:
 - This unit MUST become EXACTLY ONE method. See "STRUCTURE (this unit)" below for the
   exact method name/signature and whether it is a stepN method or a loop helper.
@@ -464,6 +474,9 @@ STRUCTURE RULES:
   any unresolved API write:
     logger.warning("TODO human-confirm: <what is unresolved>")
     # TODO human-confirm: <symbol or operation that needs verification>
+- Do NOT substitute a name-similar SINGLE API for a multi-step PROCEDURE (e.g. selecting the
+  max-capacity LUN is enumerate→read→pick, not `get_max_number_of_lun()`). If no grounded API
+  implements the intent, emit the TODO human-confirm above — never fabricate a value/derivation.
 - Reuse helper methods already defined upstream (listed below); do NOT redefine them.
 
 GROUNDING (MANDATORY before writing any API call):
@@ -509,6 +522,13 @@ PROVENANCE:
   stepN method body (e.g. `# TODO-REVIEW-NO-CODE-REF`) so reviewers can grep it."""
 
 
+# The namespace rule is FEED text derived from api_grounding's alias table (the same
+# table the gate enforces) — one source of truth for PREVENT and CATCH.
+UNIT_GEN_INSTRUCTIONS = UNIT_GEN_INSTRUCTIONS.replace("@@NAMESPACE_RULE@@", NAMESPACE_RULE)
+UNIT_GEN_INSTRUCTIONS_DIRECT = UNIT_GEN_INSTRUCTIONS_DIRECT.replace(
+    "@@NAMESPACE_RULE@@", NAMESPACE_RULE)
+
+
 def build_one_unit_prompt(
     ir: dict,
     unit: dict,
@@ -523,6 +543,8 @@ def build_one_unit_prompt(
     api_facts: list | None = None,
     canonical_facts: list | None = None,
     defaults: str = "",
+    ufs_version: str | None = None,
+    procedures: list | None = None,
 ) -> str:
     """Build the LLM generation prompt for a single unit (one step, or one loop).
 
@@ -590,6 +612,19 @@ def build_one_unit_prompt(
         structure_note,
     ]
 
+    # Target UFS version — AUTHORITATIVE: constrains which versioned APIs/struct fields are
+    # legal (e.g. get_extended_write_booster_support / w77 exist only on 4.1). Deterministic
+    # input from TC frontmatter / wiki/target.md (see pattern_generator.ufs_version).
+    if ufs_version:
+        from pattern_generator.ufs_version import struct_suffix
+        suf = struct_suffix(ufs_version)
+        suf_note = (f" The versioned structs for this target are the `*{suf}` classes "
+                    f"(e.g. DeviceDescriptor{suf})." if suf else "")
+        parts.append(
+            f"## Target UFS version: {ufs_version} (AUTHORITATIVE)\n"
+            f"Generate for UFS {ufs_version}. Use ONLY APIs / struct fields available on this "
+            f"version; do NOT use a symbol that exists only on a newer spec." + suf_note)
+
     # self.* contract
     if unit["set_vars"]:
         parts.append(
@@ -641,6 +676,14 @@ def build_one_unit_prompt(
             "## Canonical idioms (AUTHORITATIVE — enforced by the gate; these OVERRIDE "
             "any contradicting protocol path / field named in the step above. Follow them "
             "exactly)\n" + "\n".join(f"- {f}" for f in canonical_facts))
+
+    # Procedure idioms — intents that are a multi-step PROCEDURE, not a single API. AUTHORITATIVE:
+    # do NOT substitute a name-similar single call; fail-loud rather than fabricate.
+    if procedures:
+        parts.append(
+            "## Procedure idioms (AUTHORITATIVE — this intent is a multi-step procedure, NOT a "
+            "single API; do NOT substitute a name-similar single call)\n"
+            + "\n".join(f"- {g}" for g in procedures))
 
     if api_facts:
         if direct:

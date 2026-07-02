@@ -38,3 +38,9 @@ def test_build_wholefile_prompt_structure():
     assert "INSIDE the pattern class" in p
     assert "# @@PHASE_METHODS@@" in p          # scaffold embedded
     assert "raise api.PATTERN_ASSERT_" in p    # assert-discipline instruction
+
+
+def test_wholefile_instructions_carry_namespace_rule():
+    from pattern_generator.wholefile import WHOLEFILE_INSTRUCTIONS
+    assert "Namespace rule (AUTHORITATIVE" in WHOLEFILE_INSTRUCTIONS
+    assert "api.init_tester_to_unit_ready" in WHOLEFILE_INSTRUCTIONS

@@ -34,7 +34,11 @@
       "Bash(ls GitNexusMCP/Script/pattern/luns_reconfiguration/__init__.py)",
       "Bash(ls GitNexusMCP/Script/pattern/generated)",
       "mcp__gitnexus__query",
-      "mcp__gitnexus__context"
+      "mcp__gitnexus__context",
+      "mcp__gitnexus__cypher",
+      "Bash(ls -la \"D:/GME_AI/Claude/debug_hermes/PF010_0310\")",
+      "Read(//d/GME_AI/Claude/debug_hermes/PF010_0310/**)",
+      "Bash(python generate_pattern.py prepare-ir TC/PF010_0310-normalized-test-flow.md)"
     ]
   }
 }

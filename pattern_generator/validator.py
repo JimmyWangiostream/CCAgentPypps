@@ -14,18 +14,25 @@ retrieval); the checks here are deterministic, post-hoc AST reality checks again
 the IR + the Script/ library (see pattern_generator.api_grounding)."""
 import ast
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
 
 from pattern_generator.api_grounding import (
-    build_script_index, check_api_calls, format_issues,
+    build_script_index, check_api_calls, check_bare_names, check_struct_fields,
+    format_issues, resolve_bare_name,
 )
+from pattern_generator.semantic_checks import check_semantics
 
 
 def validate(py_source: str, ir: dict, script_root=None,
              py_path=None, run_mypy: bool = False) -> dict:
-    """Validate syntax, IR structure, data flow, API reality, and (opt-in) mypy.
+    """Validate syntax, IR structure, data flow, API reality, semantics, and (opt-in) mypy.
+
+    The `semantic` key holds deterministic domain-invariant findings (pure AST, no
+    Script library needed) — the meaning-level checks api_grounding deliberately skips;
+    see pattern_generator.semantic_checks.
 
     `script_root` points at the Script/ library. When omitted or not a valid
     Script root, the api_grounding check reports "skipped" rather than failing —
@@ -50,8 +57,13 @@ def validate(py_source: str, ir: dict, script_root=None,
     if flow_issues:
         result["dataflow"] = flow_issues
 
-    # API reality check (best-effort; needs the Script library)
-    result["api_grounding"] = _check_api_grounding(py_source, script_root)
+    # API reality check (best-effort; needs the Script library). Includes the target-UFS
+    # version CATCH — a used accessor whose return struct is unavailable on the target version.
+    result["api_grounding"] = _check_api_grounding(py_source, script_root, ir)
+
+    # Semantic check (deterministic, pure AST — no Script library needed)
+    sem_issues = check_semantics(py_source, ir)
+    result["semantic"] = format_issues(sem_issues) if sem_issues else "pass"
 
     if run_mypy:
         result["mypy"] = _check_mypy(py_path, script_root)
@@ -91,7 +103,37 @@ def _check_mypy(py_path, script_root):
     name = py.name
     errs = [ln.strip() for ln in proc.stdout.splitlines()
             if ": error:" in ln and name in ln]
-    return errs or "pass"
+    return _enrich_mypy_names(errs, script_root) or "pass"
+
+
+_MYPY_NAME_RE = re.compile(r'Name "([^"]+)" is not defined')
+
+
+def _enrich_mypy_names(errs: list, script_root) -> list:
+    """Append the deterministic RESOLUTION to mypy name-defined errors, so a repair
+    prompt carries the fix (write api.X / use logger / import time) — not just the
+    error. Round 1's bare `init_tester_to_unit_ready` got "fixed" to `lib.` exactly
+    because the repair prompt named the error but not the correct namespace."""
+    if not errs:
+        return errs
+    index = None
+    if script_root:
+        from pattern_generator.api_grounding import _cached_index
+        index = _cached_index(str(script_root))
+    out: list = []
+    for ln in errs:
+        m = _MYPY_NAME_RE.search(ln)
+        if m:
+            nm = m.group(1)
+            alias = resolve_bare_name(nm, index) if index else None
+            if nm in ("_log", "log"):
+                ln += "  [hint: use the scaffold's 'logger']"
+            elif alias:
+                ln += f"  [hint: write {alias}.{nm} — see the namespace rule]"
+            elif nm in sys.stdlib_module_names:
+                ln += f"  [hint: add 'import {nm}']"
+        out.append(ln)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -156,9 +198,21 @@ def _check_structure(tree: ast.Module, py_source: str, ir: dict) -> list:
                     f"`if __name__ == '__main__'` guard (dead / outside the class)")
 
     # (3) Every planned unit method must exist as a class method.
-    for m in _expected_methods(ir):
+    expected = _expected_methods(ir)
+    for m in expected:
         if m not in class_methods:
             issues.append(f"planned method '{m}' is missing from the pattern class")
+
+    # (3b) No UNPLANNED stepN method — an extra auto-run method beyond the unit plan is drift
+    #      (renumbered / duplicated step; process() runs it out of plan). Non-stepN helpers
+    #      are allowed (a planned stepN may decompose into them), so this is FP-safe.
+    if expected:
+        planned_steps = {m for m in expected if re_step(m)}
+        for m in sorted(class_methods):
+            if re_step(m) and m not in planned_steps:
+                issues.append(f"unplanned stepN method '{m}' not in the unit plan "
+                              f"(planned: {sorted(planned_steps)}) — process() would run it "
+                              "out of plan")
 
     # (4) The class must contain at least one stepN method.
     if not any(re_step(m) for m in class_methods):
@@ -170,6 +224,35 @@ def _check_structure(tree: ast.Module, py_source: str, ir: dict) -> list:
             lc = phase.get("loop_count")
             if lc is not None and str(lc) not in py_source:
                 issues.append(f"{phase['phase_id']}: loop_count {lc} not found in source")
+
+    # (6) Duplicate class-member defs (e.g. a unit-provided post_process merged next to
+    #     the scaffold stub) — Python silently keeps the LAST def; the earlier is dead.
+    by_name: dict = {}
+    for n in class_method_nodes:
+        by_name.setdefault(n.name, []).append(n.lineno)
+    for name, linenos in sorted(by_name.items()):
+        if len(linenos) > 1:
+            issues.append(f"method '{name}' defined more than once in the pattern class "
+                          f"(lines {', '.join(map(str, linenos))}) — keep ONE")
+
+    # (7) Loop sub-step helpers must accept (self, loop_idx) — the deterministic
+    #     wrapper calls self._<slug>_<id>(loop_idx); a (self)-only def = TypeError.
+    try:
+        from pattern_generator.stepwise import generation_units
+        loop_helpers = [u["method"] for u in generation_units(ir)
+                        if u.get("loop_idx_param")]
+    except Exception:
+        loop_helpers = []
+    fns = {n.name: n for n in class_method_nodes}
+    for m in loop_helpers:
+        fn = fns.get(m)
+        if fn is None:
+            continue          # (3) already reports the missing method
+        a = fn.args
+        pos = [x.arg for x in list(getattr(a, "posonlyargs", [])) + list(a.args)]
+        if (len(pos) < 2 or pos[1] != "loop_idx") and not a.vararg:
+            issues.append(f"method '{m}' must have signature (self, loop_idx) — the "
+                          f"loop wrapper calls self.{m}(loop_idx)")
 
     return issues
 
@@ -248,11 +331,19 @@ def _check_dataflow(tree: ast.Module, ir: dict) -> list:
     return issues
 
 
-def _check_api_grounding(py_source: str, script_root):
+def _check_api_grounding(py_source: str, script_root, ir: dict | None = None):
     if not script_root:
         return "skipped"
     index = build_script_index(script_root)
     if not index:
         return "skipped"
-    issues = check_api_calls(py_source, index)
+    issues = (check_api_calls(py_source, index) + check_struct_fields(py_source, index)
+              + check_bare_names(py_source, index))
+    # Target-UFS-version CATCH: a used accessor whose return struct has no variant for the
+    # resolved target version (TC frontmatter ufs_version / wiki/target.md).
+    from pattern_generator.capability_resolver import check_version_availability
+    from pattern_generator.ufs_version import resolve as _resolve_version
+    version = _resolve_version(ir or {})
+    if version:
+        issues += check_version_availability(py_source, index, version)
     return "pass" if not issues else format_issues(issues)

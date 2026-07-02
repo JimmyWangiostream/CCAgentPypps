@@ -41,6 +41,14 @@ def main():
     pu.add_argument("--grounding", choices=["gitnexus", "direct"], default=None,
                     help="override grounding mode (default: read from run dir's _run_meta.json)")
 
+    pvu = sub.add_parser("validate-unit",
+                         help="per-unit gate: run the api/semantic/citation checks on ONE "
+                              "unit's methods (run right after writing it; rewrite on FAIL)")
+    pvu.add_argument("run_dir", help="generated/<ID>/ directory")
+    pvu.add_argument("unit_index", type=int, help="1-based unit number")
+    pvu.add_argument("--script-root", default=None,
+                     help="Root of the Script/ library (default: PGConfig.script_root)")
+
     pa = sub.add_parser("assemble", help="scaffold.py + phase_*_methods.py -> final .py")
     pa.add_argument("run_dir", help="generated/<ID>/ directory")
     pa.add_argument("pattern_name", help="Output filename without .py extension")
@@ -130,6 +138,50 @@ def main():
             methods_file = out["prompt_file"].replace("_prompt.txt", "_methods.py")
             print(f"Unit {out['unit_index']}/{out['unit_count']}: "
                   f"read {out['run_dir']}/{out['prompt_file']} → write {methods_file}")
+    elif args.cmd == "validate-unit":
+        import sys
+        from pattern_generator.assemble import _parse_unit_methods
+        from pattern_generator.unit_gate import check_unit, unit_findings
+        run_dir = Path(args.run_dir)
+        script_root = args.script_root or PGConfig().script_root
+        matches = sorted(run_dir.glob(f"unit_{args.unit_index:02d}_*_methods.py"))
+        if not matches:
+            print(f"No unit_{args.unit_index:02d}_*_methods.py in {run_dir}")
+            sys.exit(2)
+        mf = matches[0]
+        u = _parse_unit_methods(mf.read_text(encoding="utf-8", errors="ignore"))
+        # Pin the expected method name from the unit plan so naming drift fails HERE.
+        expected = None
+        loop_idx_required = False
+        units_f = run_dir / "1_units.json"
+        if units_f.is_file():
+            import json as _json
+            plan = _json.loads(units_f.read_text(encoding="utf-8"))
+            if 1 <= args.unit_index <= len(plan):
+                pu = plan[args.unit_index - 1]
+                if pu.get("method"):
+                    expected = [pu["method"]]
+                loop_idx_required = bool(pu.get("loop_idx_param"))
+        # Imports from earlier units count too — assemble merges all EXTRA IMPORTS.
+        extra_imports = list(u.extra_imports)
+        for f in sorted(run_dir.glob("unit_*_methods.py")):
+            try:
+                nn = int(f.name.split("_", 2)[1])
+            except (IndexError, ValueError):
+                continue
+            if nn < args.unit_index:
+                extra_imports.extend(_parse_unit_methods(
+                    f.read_text(encoding="utf-8", errors="ignore")).extra_imports)
+        res = check_unit(u.methods, code_refs=u.code_refs, script_root=script_root,
+                         expected_methods=expected, extra_imports=extra_imports,
+                         loop_idx_required=loop_idx_required)
+        findings = unit_findings(res)
+        if findings:
+            print(f"FAIL {mf.name} -- fix these and rewrite the unit before continuing:")
+            for line in findings:
+                print(f"  - {line}")
+            sys.exit(1)
+        print(f"PASS {mf.name}")
     elif args.cmd == "assemble":
         from pattern_generator.assemble import assemble_pattern
         run_dir = Path(args.run_dir)

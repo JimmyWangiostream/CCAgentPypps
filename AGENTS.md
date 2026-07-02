@@ -53,6 +53,12 @@ read the emitted prompt file, write the named output. The prompt files are:
 A repo-local skill at `.claude/skills/generate-pattern/SKILL.md` packages this whole flow so
 any agent's skill mechanism can find + run it. It indexes back to this file and CLAUDE.md.
 
+### Feed-once runbook prompt
+`HERMES_GEN_PROMPT.md` (repo root) is a self-contained agent prompt: feed that one file to
+an agent, then just name the target ("gen PF010_0310" or a TC path). It waits for the
+target, cleans stale run artifacts, runs the full pipeline with the per-unit gate
+discipline, and reports rounds + surviving finding classes.
+
 ### Quick start — onboarding ANY agent (incl. non-Claude-Code)
 
 Prerequisites for the agent:
@@ -103,11 +109,18 @@ Generate a UFS test pattern for TC/<file>.md. Run, in order:
 ### New commands (since the original pipeline)
 - `prepare --grounding {gitnexus,direct}` — `direct` injects candidate symbols from
   `Script` via `code_retrieval` (no MCP server); default `gitnexus` is unchanged.
-- `validate` — now also reports **structure** (every stepN/helper is a class member;
-  no method outside the class / after `if __name__`) and **dataflow** (a consumer must
-  not re-derive a var it should inherit), plus api `missing_required_arg`.
-- `finish` — gate driver: validate; on FAIL emit a repair prompt (validator findings +
-  review) and loop (`--max-rounds`, default 3); on PASS emit the review prompt.
+- `validate` — reports the full key set **`syntax · structure · dataflow · api_grounding
+  · semantic · mypy`**. `structure` = every stepN/helper is a class member (no method
+  outside the class / after `if __name__`); `dataflow` = a consumer must not re-derive a
+  var it should inherit; `api_grounding` adds `missing_required_arg` / `unknown_enum_member`
+  / **`version_unavailable`** (a symbol whose return struct doesn't exist on the target UFS
+  version — see FEED levers below); `semantic` = deterministic MEANING checks
+  (`semantic_checks.py`, e.g. `wb_support_path`); `mypy` = per-file type-check gate.
+  **mypy runs by default** (from `GitNexusMCP/` with `mypy_skip_known_issue.ini`); pass
+  `--no-mypy` to disable. The old "manual step 6b" is now automatic.
+- `finish` — gate driver: validate (incl. mypy unless `--no-mypy`); on FAIL emit a repair
+  prompt (validator findings + review) and loop (`--max-rounds`, default 3); on PASS emit
+  the review prompt.
 - `review` — build the review→repair prompt: IR checkpoints + the **relevant review
   references** (keyword-selected pitfall docs, cap 6) + the **normalized TC flow**
   (cross-checked for step compliance) + code.
@@ -145,22 +158,35 @@ Generate a UFS test pattern for TC/<file>.md. Run, in order:
 - **Pitfall checklist (the review references):** `python generate_pattern.py rules`,
   docs in `pattern_generator/review_refs/*.md` (loader: `pattern_generator/rules.py`).
 
-### Two review layers (semantic vs deterministic — they are complementary)
-The review deliberately splits into two layers, each doing only what it is uniquely good at:
-- **Semantic layer = references-driven LLM review** (`review`/`finish`). Protocol path,
+### Two rule layers (advisory LLM-review vs deterministic gate — complementary)
+Rules split into two layers, each doing only what it is uniquely good at:
+- **Advisory layer = references-driven LLM review** (`review`/`finish`). Protocol path,
   volatile-flag asserts, reset determinism, exception naming, TC-step compliance, … live
-  as markdown pitfall docs in `review_refs/`. **Adding a new rule = adding a `.md`** (no
-  hand-coded check); the relevant docs are keyword-selected per pattern (cap 6) so the
-  folder can grow without bloating any one prompt.
-- **Deterministic layer = AST api-facts** (`pattern_generator/api_grounding.py`). Exact
-  param names, enum members, signatures, **and struct fields** (from each function's return
-  type) — the things an LLM reliably guesses wrong. The SAME index is used FOUR ways: it
-  FEEDS at generation (Phase B — signatures/enums/struct-fields) and CATCHES at the gate
-  (`validate`/`finish`) via (1) `check_api_calls` (symbol/kwarg/positional/required-arg/enum),
-  (3) `check_struct_fields` (a field not on the call's return struct, e.g. a `DeviceDescriptor`
-  field read off the WriteBooster-support union), and (4) `check_citations` (a `=== CODE REFS ===`
-  citation whose symbol exists nowhere — audit). The LLM review must NOT invent API; if unsure it
-  reads real Script source, and the AST gate catches any residual guess.
+  as markdown pitfall docs in `pattern_generator/review_refs/`. **Adding a rule = adding a
+  `.md`** (no hand-coded check); the relevant docs are keyword-selected per pattern (cap 6)
+  so the folder can grow without bloating any one prompt. This layer *suggests* — it is
+  BM25-selected and may not fire.
+- **Deterministic layer = gate-enforced, two enforcers.** These are machine-decidable and
+  FAIL the gate, so high-value rules belong here, not the advisory `.md`:
+  - **`api_grounding.py`** — one AST index over `Script`, used FOUR ways. It FEEDS at
+    generation (Phase B — exact signatures / enum members / struct fields of return types)
+    and CATCHES at the gate via (1) `check_api_calls`
+    (symbol/kwarg/positional/`missing_required_arg`/`unknown_enum_member`),
+    (3) `check_struct_fields` (a field not on the call's return struct, e.g. a
+    `DeviceDescriptor` field read off the WriteBooster-support union), (4) `check_citations`
+    (a `=== CODE REFS ===` citation whose symbol exists nowhere — audit). Its sibling
+    **`capability_resolver.check_version_availability`** adds the `version_unavailable`
+    CATCH (a symbol whose return struct has no variant for the target UFS version).
+  - **`semantic_checks.py`** — a deterministic MEANING layer (the `semantic` gate key) for
+    invariants `api_grounding` can't decide (attribute access / value logic). Active rule
+    `wb_support_path` (WriteBooster support must be
+    `get_extended_ufs_features_support().u8_write_booster`, not the FFU bit `u0_ffu`). It is
+    CATCH (`check_semantics`) + PREVENT (`CANONICAL_IDIOMS`, injected at generation) from one
+    source of truth. It also runs `check_ir_protocol_paths(ir)` (Lever #4) — **report-only**,
+    surfaced by `prepare` to `<run>/ir_lint.md` (a TC step whose stated protocol path
+    contradicts a canonical idiom; never rewrites the TC).
+  The LLM review must NOT invent API; if unsure it reads real `Script` source, and these
+  deterministic enforcers catch any residual guess.
 
 ### Generation grounding: top-3 + injected exact API facts (Phase B)
 Per-unit prompts inject **top-3** wiki essence + **top-3** code candidates (token-sensitive
@@ -181,6 +207,26 @@ nail the exact form. Correctness comes from these deterministic facts, not from 
   the model confirms via its own gitnexus `context()` is PRIMARY and wins on conflict. In
   **direct** mode (no gitnexus) they stay AUTHORITATIVE. So the FEED never out-ranks the
   model's own gitnexus discovery when the two disagree.
+- **Grounding FEED levers (target-version + idiom force-feed):** the FEED is made
+  deterministic where it can be, not just heuristic top-N:
+  - **Target UFS version** (`pattern_generator/ufs_version.py`) is a first-class input,
+    resolved TC-frontmatter `ufs_version:` > `wiki/target.md` (`ufs_version: X.Y`). It gates
+    version-only APIs both ways: `capability_resolver.version_gate` DROPS a FEED candidate
+    whose return struct exists only on another version (e.g. a 4.1-only accessor on a 3.1
+    target), and `check_version_availability` CATCHES it at the gate (`version_unavailable`).
+    This kills the "4.1 API leaks into a 3.1 pattern" class of bug at its source.
+  - **Canonical-symbol force-feed** (`capability_resolver.canonical_symbols`): the accessor a
+    canonical idiom points at is force-added to the FEED symbol list, so the CORRECT
+    accessor's real signature + struct fields anchor the model — not just idiom prose beside
+    a wrong sibling's fields.
+  - **Procedure idioms** (`pattern_generator/procedure_idioms.py`, `match_procedures`): when
+    the correct implementation is a multi-step PROCEDURE with no single API (seed:
+    `max_capacity_lun`), an authoritative guard is injected — do NOT substitute a
+    name-similar single call; ground each step; emit a fail-loud `TODO human-confirm` rather
+    than fabricate a value.
+  - **Per-unit micro-gate:** `prepare-unit N` re-runs the deterministic checks
+    (`unit_gate.check_unit`) on the upstream unit N-1 and prepends any failure to unit N's
+    prompt — self-healing even if you skipped the explicit `validate-unit` step.
 - **Defaults provenance:** `<run>/defaults_debug.md` (deterministic — which default
   overrides + ModelDefault topic were OFFERED to each unit) + `retrieval_debug.md` (which
   embeds it, alongside the model's self-reported `# src[wiki]` usage).

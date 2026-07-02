@@ -39,10 +39,16 @@ def build(wiki_root=None, use_dense=True) -> None:
         layer = d.layer if d.layer in by_layer else (
             "concept" if d.path.startswith("concepts/") else "entity")
         by_layer[layer].append(stem)
+    # VC (verification criteria) — embedded as its own layer for the retrieval VC band.
+    from wiki_retrieval.vc import load_vc
+    vc_docs = load_vc(wiki_root)
+    all_docs = {**docs, **vc_docs}
+    if vc_docs:
+        by_layer["vc"] = list(vc_docs)
     stems_by_layer, mats = {}, {}
     for layer, stems in by_layer.items():
         stems_by_layer[layer] = stems
-        mats[layer] = embedder.encode([docs[s].search_text() for s in stems])
+        mats[layer] = embedder.encode([all_docs[s].search_text() for s in stems])
     index_store.save_embeddings(stems_by_layer, mats, embedder.model_name, wiki_root)
     print(f"dense embeddings: model={embedder.model_name}, "
           f"{sum(len(s) for s in stems_by_layer.values())} docs -> {index_store.index_dir(wiki_root)}")

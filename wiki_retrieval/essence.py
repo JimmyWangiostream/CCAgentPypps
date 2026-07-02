@@ -40,7 +40,7 @@ def _ref_source(result, entity_stem: str) -> str:
 
 
 def build_essence(result, max_concepts: int = 3, max_entities: int = 5,
-                  max_expanded: int = 4) -> str:
+                  max_expanded: int = 4, max_vc: int = 2) -> str:
     """Render the extractive essence block (capped to stay concise, not noisy)."""
     if not result.has_match:
         return f"## Wiki essence — query: {result.query}\n(NO MATCH — no relevant wiki page)"
@@ -71,6 +71,14 @@ def build_essence(result, max_concepts: int = 3, max_entities: int = 5,
             src = _ref_source(result, stem)
             via = f"  ← referenced by {src}" if src else ""
             lines.append(f"- {doc.path}{via}")
+
+    vc = getattr(result, "vc", None)
+    if vc:
+        lines.append("verification criteria (VC) — checkpoints/expected results to satisfy:")
+        for stem, _ in vc[:max_vc]:
+            doc = result.docs.get(stem)
+            if doc:
+                lines.append(f"- {doc.title}: {_lead(doc.body)} ({doc.path})")
 
     # NOTE: conflict/authority overrides used to be injected here as a weak pointer
     # ("Default LUN Selection → affects [[lun]]") — title only, no resolved value, so

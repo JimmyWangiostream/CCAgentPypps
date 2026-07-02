@@ -18,7 +18,7 @@ from __future__ import annotations
 from pattern_generator.validator import validate
 from pattern_generator.review import build_review_prompt
 
-_GATE_KEYS = ("syntax", "structure", "dataflow", "api_grounding", "mypy")
+_GATE_KEYS = ("syntax", "structure", "dataflow", "api_grounding", "semantic", "mypy")
 
 
 def gate_failures(report: dict) -> dict:

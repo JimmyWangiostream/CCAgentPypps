@@ -12,7 +12,7 @@ Condensed knowledge bank from the two-pass review of `PSW_F_P3_PF010_0310_WriteB
 | HIGH-1 | High | Step 1.2 Exception Type | `PATTERN_ASSERT_UFS_WRONG_PARAMETER_LUN_CHECK_ERROR` | `PATTERN_ASSERT_UNEXPECTED_CONDITION` |
 | HIGH-2 | High | Step 1.3/1.4 Length Mismatch | Independent `random.randint(1,256)` | `self._last_write_length` stored in write, reused in read |
 | HIGH-3 | High | Step 1.5 Reset Determinism | `random.choice(['SSU','POR','LINKSTARTUP'])` | `self._reset_types[loop_idx % N]` deterministic rotation |
-| HIGH-4 | High | Step 1.5 SSU Manual Construction | `StartStopUnit()` with hardcoded params | `idv.init_tester_to_unit_ready(resetmode=HW_RESET, powerdown=True)` |
+| HIGH-4 | High | Step 1.5 SSU Manual Construction | `StartStopUnit()` with hardcoded params | `api.init_tester_to_unit_ready(resetmode=api.Dcmd5ResetType.HW_RESET, powerdown=True)` |
 | HIGH-5 | High | Step 2.3 Length Mismatch | Same as HIGH-2 | Same fix applied to Phase 2 |
 | HIGH-6 | High | Step 2.4 Reset Issues | Same as HIGH-3/4 | Same fix applied to Phase 2 |
 | HIGH-7 | High | Step 3.4 TC Flow Types | Generic SSU/POR/LINKSTARTUP | `['POR_delay', 'SSU+Hibernate+POR']` per TC flow |

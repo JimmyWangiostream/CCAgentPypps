@@ -4,7 +4,9 @@ Uses a tiny synthetic Script/ tree (no dependency on the real GitNexusMCP index)
 from pathlib import Path
 
 from pattern_generator.api_grounding import (
-    build_script_index, check_api_calls, format_issues, api_facts,
+    SCAFFOLD_NAMES, alias_for_path, api_facts, build_script_index,
+    check_api_calls, check_bare_names, format_issues, render_sig,
+    resolve_bare_name,
 )
 
 
@@ -31,6 +33,8 @@ def _mini_script(root: Path) -> Path:
         "def get_config_descriptors(print=False):\n"
         "    return []\n"
         "def flexible(a, **kwargs):\n"
+        "    pass\n"
+        "def do_write(write_record: list[list], count: int = 1):\n"
         "    pass\n",
         encoding="utf-8")
     (api / "cmd_seq" / "__init__.py").write_text(
@@ -198,3 +202,174 @@ class TestApiFacts:
 
     def test_missing_root_returns_empty(self, tmp_path):
         assert api_facts(tmp_path / "nope", ("set_flag",), "set flag") == []
+
+    def test_enum_fact_carries_alias_prefix(self, tmp_path):
+        facts = api_facts(self._root(tmp_path), ("set_flag",), "set flag writebooster en")
+        assert any(f.startswith("api.FlagIDN valid members:") for f in facts)
+
+
+class TestAliasMapping:
+    """ONE source of truth: defining-module path -> scaffold alias."""
+
+    def test_alias_for_path(self):
+        assert alias_for_path("api/ufs_api/initial_device.py") == "api"
+        assert alias_for_path("api/cmd_seq/executor.py") == "ExecuteCMD"   # wins over api/
+        assert alias_for_path("lib/sdk_lib/user.py") == "lib"
+        assert alias_for_path("Script/api/rw.py") == "api"                 # Script/ prefix ok
+        assert alias_for_path("api\\ufs_api\\rw.py") == "api"              # backslashes ok
+        assert alias_for_path("pattern/sample_code/wb.py") is None
+        assert alias_for_path("project_api/x.py") is None
+
+    def test_resolve_bare_name_priority(self, tmp_path):
+        idx = build_script_index(_mini_script(tmp_path / "Script"))
+        assert resolve_bare_name("set_flag", idx) == "api"
+        assert resolve_bare_name("delay", idx) == "lib"
+        # cmd_seq symbols are re-exported into api -> api wins by priority (still valid)
+        assert resolve_bare_name("send", idx) == "api"
+        assert resolve_bare_name("no_such_symbol", idx) is None
+
+    def test_scaffold_names_match_standard_imports(self):
+        """SCAFFOLD_NAMES must equal the names stepwise.STANDARD_IMPORTS binds."""
+        import ast
+        from pattern_generator.stepwise import STANDARD_IMPORTS
+        bound: set = set()
+        for n in ast.parse(STANDARD_IMPORTS).body:
+            if isinstance(n, ast.Import):
+                bound |= {a.asname or a.name.split(".")[0] for a in n.names}
+            elif isinstance(n, ast.ImportFrom):
+                bound |= {a.asname or a.name for a in n.names}
+        assert bound == set(SCAFFOLD_NAMES)
+
+
+class TestWrongNamespace:
+    """A symbol called under the WRONG alias must yield the exact corrected form."""
+
+    def _idx(self, tmp_path):
+        return build_script_index(_mini_script(tmp_path / "Script"))
+
+    def test_wrong_namespace_on_call(self, tmp_path):
+        src = "def f(self):\n    lib.set_flag(idn=1)\n"
+        issues = check_api_calls(src, self._idx(tmp_path))
+        wn = [i for i in issues if i["kind"] == "wrong_namespace"]
+        assert wn and "write api.set_flag(...)" in wn[0]["detail"]
+
+    def test_wrong_namespace_on_non_call_attribute(self, tmp_path):
+        # the lib.Dcmd5ResetType.HW_RESET class of bug — an attribute, not a call
+        src = "def f(self):\n    x = lib.Status.OK\n"
+        issues = check_api_calls(src, self._idx(tmp_path))
+        wn = [i for i in issues if i["kind"] == "wrong_namespace"]
+        assert wn and "write api.Status" in wn[0]["detail"]
+
+    def test_correct_alias_attribute_passes(self, tmp_path):
+        src = "def f(self):\n    x = api.Status.OK\n"
+        issues = check_api_calls(src, self._idx(tmp_path))
+        assert not [i for i in issues if i["kind"] in ("wrong_namespace", "unknown_symbol")]
+
+    def test_unknown_everywhere_stays_unknown_symbol(self, tmp_path):
+        src = "def f(self):\n    lib.totally_fabricated()\n"
+        issues = check_api_calls(src, self._idx(tmp_path))
+        assert [i for i in issues if i["kind"] == "unknown_symbol"]
+        assert not [i for i in issues if i["kind"] == "wrong_namespace"]
+
+
+class TestCheckBareNames:
+    """Bare star-import idioms / undefined names — previously a total blind spot."""
+
+    def _idx(self, tmp_path):
+        return build_script_index(_mini_script(tmp_path / "Script"))
+
+    def _wrap(self, body: str) -> str:
+        return "class _W:\n" + body
+
+    def test_bare_call_resolved_to_alias(self, tmp_path):
+        src = self._wrap("    def step1(self):\n        set_flag(idn=1)\n")
+        issues = check_bare_names(src, self._idx(tmp_path))
+        bn = [i for i in issues if i["kind"] == "bare_name"]
+        assert bn and "write api.set_flag(...)" in bn[0]["detail"]
+
+    def test_bare_enum_attribute_resolved(self, tmp_path):
+        src = self._wrap("    def step1(self):\n        x = Status.OK\n")
+        issues = check_bare_names(src, self._idx(tmp_path))
+        bn = [i for i in issues if i["kind"] == "bare_name"]
+        assert bn and "write api.Status" in bn[0]["detail"]
+
+    def test_bare_lib_symbol_resolved(self, tmp_path):
+        src = self._wrap("    def step1(self):\n        delay(2)\n")
+        issues = check_bare_names(src, self._idx(tmp_path))
+        bn = [i for i in issues if i["kind"] == "bare_name"]
+        assert bn and "write lib.delay(...)" in bn[0]["detail"]
+
+    def test_undefined_log_suggests_logger(self, tmp_path):
+        src = self._wrap("    def step1(self):\n        _log.info('x')\n")
+        issues = check_bare_names(src, self._idx(tmp_path))
+        un = [i for i in issues if i["kind"] == "undefined_name"]
+        assert un and un[0].get("suggestion") == "logger"
+
+    def test_missing_stdlib_import_hinted(self, tmp_path):
+        src = self._wrap("    def step1(self):\n        time.sleep(1)\n")
+        issues = check_bare_names(src, self._idx(tmp_path))
+        un = [i for i in issues if i["kind"] == "undefined_name"]
+        assert un and "add 'import time'" in un[0]["detail"]
+
+    def test_scope_model_negatives(self, tmp_path):
+        # locals, params, comprehension targets, nested defs, self/logger — all legal
+        src = self._wrap(
+            "    def step1(self, count):\n"
+            "        total = 0\n"
+            "        items = [x for x in range(count)]\n"
+            "        def inner(y):\n"
+            "            return y + total\n"
+            "        total = inner(1)\n"
+            "        self.result = items\n"
+            "        logger.info(total)\n"
+            "        api.set_flag(idn=1)\n")
+        assert check_bare_names(src, self._idx(tmp_path)) == []
+
+    def test_extra_imports_respected(self, tmp_path):
+        src = self._wrap("    def step1(self):\n        x = cast(int, 1)\n")
+        idx = self._idx(tmp_path)
+        assert [i for i in check_bare_names(src, idx)]                       # without
+        assert check_bare_names(src, idx,
+                                extra_imports=["from typing import cast"]) == []
+
+    def test_script_star_import_makes_bare_legal(self, tmp_path):
+        # real reference patterns do `from Script.api.ufs_api import *`
+        src = ("from Script.api.ufs_api import *\n"
+               "class P:\n"
+               "    def step1(self):\n"
+               "        set_flag(idn=1)\n"
+               "        x = Status.OK\n")
+        assert check_bare_names(src, self._idx(tmp_path)) == []
+
+    def test_unresolvable_star_import_suppresses_all(self, tmp_path):
+        src = ("from somewhere_else import *\n"
+               "class P:\n"
+               "    def step1(self):\n"
+               "        set_flag(idn=1)\n"
+               "        _log.info('x')\n")
+        assert check_bare_names(src, self._idx(tmp_path)) == []
+
+    def test_one_finding_per_name(self, tmp_path):
+        src = self._wrap(
+            "    def step1(self):\n"
+            "        set_flag(idn=1)\n"
+            "        set_flag(idn=2)\n"
+            "    def step2(self):\n"
+            "        set_flag(idn=3)\n")
+        issues = check_bare_names(src, self._idx(tmp_path))
+        assert len([i for i in issues if i["symbol"] == "set_flag"]) == 1
+
+
+class TestAnnotatedSignatures:
+    """FEED fidelity: annotated params carry their real type."""
+
+    def test_render_sig_shows_annotations(self, tmp_path):
+        idx = build_script_index(_mini_script(tmp_path / "Script"))
+        spec = idx["api"].symbols["do_write"]
+        sig = render_sig("do_write", spec)
+        assert "write_record: list[list]" in sig
+        assert "count: int=..." in sig
+
+    def test_api_facts_signature_carries_annotation(self, tmp_path):
+        facts = api_facts(_mini_script(tmp_path / "Script"), ("do_write",), "do write")
+        assert any("write_record: list[list]" in f for f in facts)
