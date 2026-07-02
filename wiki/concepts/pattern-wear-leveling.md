@@ -1,6 +1,7 @@
 ---
 type: concept
 title: "Pattern: Wear Leveling Implementation Guide"
+aliases: [wear-leveling]
 tags: [pattern, script, implementation, wear-leveling, erase-count, vb-version, gc]
 sources: [script, spec, modeldefault]
 created: 2026-06-21

@@ -55,7 +55,7 @@ The Device Descriptor is the top-level descriptor of a UFS device. It identifies
 | 25h–28h | dPSAMaxDataSize | Max PSA data size (4KB units) |
 | 29h | bPSAStateTimeout | |
 | 2Ah | iProductRevisionLevel | Index into [[string-descriptor]] |
-| 4Fh–52h | dExtendedUFSFeaturesSupport | 32-bit; bit[0]=WriteBooster, bit[2]=FFU ext, bit[3]=Refresh, bit[4]=Dynamic Capacity, bit[5]=WriteBooster type, bit[6]=Advanced RPMB, bit[13]=HID, bit[14]=FastRecovery |
+| 4Fh–52h | dExtendedUFSFeaturesSupport | 32-bit; bit[0]=FFU, bit[1]=PSA, bit[2]=Device Life Span, bit[3]=Refresh, bit[8]=WriteBooster, bit[9]=Performance Throttling, bit[10]=Advanced RPMB, bit[13]=HID, bit[14]=Barrier, bit[18]=FastRecovery (bit positions per the `ExtendedUFSFeaturesSupport` struct) |
 | 53h | bWriteBoosterBufferPreserveUserSpaceEn | |
 | 54h | bWriteBoosterBufferType | 00h=LU dedicated buffer, 01h=shared buffer |
 | 55h–58h | dNumSharedWriteBoosterBufferAllocUnits | For shared buffer type only |
@@ -69,11 +69,18 @@ Identifies the UFS specification revision. UFS 4.1 = `0410h`. Used to determine 
 Count of currently enabled Normal LUs. Ranges from 0 to bMaxNumberLU (from [[geometry-descriptor]]).
 
 ### dExtendedUFSFeaturesSupport (4Fh–52h)
-32-bit bitmap of optional features:
-- **bit[0]**: WriteBooster supported
-- **bit[5]**: WriteBooster buffer type (0=LU-dedicated, 1=shared)
+32-bit bitmap of optional features (bit positions per the `ExtendedUFSFeaturesSupport`
+struct; read from the Device Descriptor via `get_extended_ufs_features_support()`):
+- **bit[0]**: FFU (do NOT mistake this for WriteBooster)
+- **bit[3]**: Refresh Operation
+- **bit[8]**: WriteBooster supported → `u8_write_booster`
+- **bit[10]**: Advanced RPMB
 - **bit[13]**: HID (Host Initiated Defragmentation)
-- **bit[14]**: FastRecovery
+- **bit[14]**: Barrier
+- **bit[18]**: FastRecovery
+
+Note: WriteBooster buffer *type* is NOT a bit in this field — it is the separate
+Device Descriptor byte `bWriteBoosterBufferType` (54h).
 
 ### bWriteBoosterBufferType (54h)
 - `00h` — Each LU has its own dedicated WB buffer
@@ -89,7 +96,7 @@ spec_version = (resp[0x10] << 8) | resp[0x11]  # Should be 0x0410 for UFS 4.1
 num_lu       = resp[0x06]
 wb_type      = resp[0x54]  # 0=dedicated, 1=shared
 ext_features = int.from_bytes(resp[0x4F:0x53], 'big')
-wb_supported = bool(ext_features & 0x01)
+wb_supported = bool(ext_features & (1 << 8))  # bit[8] = WriteBooster (bit[0] is FFU)
 ```
 
 ## Related

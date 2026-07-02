@@ -1,0 +1,148 @@
+{
+  "pattern_id": "PF002_0098",
+  "title": "PF002_0098_Boot_Stress_Test-Normalized-TestFlow",
+  "description": "驗證 Boot LUN 資料在隨機 Reset 壓力下的完整性。兩回合測試，每回合先配置並啟用 Boot LUN、",
+  "tags": [
+    "test-flow",
+    "ufs",
+    "pf002_0098",
+    "scsi-cmd",
+    "boot-lun",
+    "reset",
+    "stress-test"
+  ],
+  "ufs_version": "",
+  "phases": [
+    {
+      "phase_id": "loop_0",
+      "name": "Burn-in Loop",
+      "type": "loop",
+      "loop_type": "condition",
+      "loop_count": null,
+      "loop_condition": null,
+      "steps": [
+        {
+          "step_id": "step_0_1",
+          "name": "配置 Device Descriptor Boot 參數",
+          "scsi_cmd": null,
+          "ufs_query": "WRITE DESCRIPTOR",
+          "opcode": null,
+          "query_opcode": "0x08 (WRITE DESCRIPTOR)",
+          "idn": null,
+          "expected": "",
+          "fail_condition": null,
+          "on_fail": null,
+          "produces": [],
+          "consumes": [],
+          "raw_content": "**UFS QUERY**: `WRITE DESCRIPTOR` — Device Descriptor (IDN 0x00)\n\n**目的**: 設定 Device Descriptor 中的 Boot 相關欄位（bBootEnable），使裝置支援 Boot 功能。\n\n| Field | Value |\n|-------|-------|\n| Query Opcode | 0x08 (WRITE DESCRIPTOR) |\n| Descriptor IDN | 0x00 (Device Descriptor) |\n| bBootEnable | 0x01 (Boot Enable) |\n\n**UFS SPEC Reference**: JESD220H Section 10.7.9 (WRITE DESCRIPTOR), Section 14.5.1 (Device Descriptor)\n\n---"
+        },
+        {
+          "step_id": "step_0_2",
+          "name": "啟用 Boot LUN",
+          "scsi_cmd": null,
+          "ufs_query": "WRITE ATTRIBUTE",
+          "opcode": null,
+          "query_opcode": "0x04 (WRITE ATTRIBUTE)",
+          "idn": null,
+          "expected": "",
+          "fail_condition": null,
+          "on_fail": null,
+          "produces": [],
+          "consumes": [],
+          "raw_content": "**UFS QUERY**: `WRITE ATTRIBUTE` — bBootLunEn (IDN 0x00)\n\n**目的**: 設定 bBootLunEn Attribute，將目標 LUN 標示為 Boot LUN，使其可透過 Boot W-LUN 存取。\n\n| Field | Value |\n|-------|-------|\n| Query Opcode | 0x04 (WRITE ATTRIBUTE) |\n| Attribute IDN | 0x00 (bBootLunEn) |\n| Selector | 0x00 |\n| Value | 依據目標 Boot LUN 設定對應 bit（bit 0 = Boot LU A, bit 1 = Boot LU B） |\n\n**UFS SPEC Reference**: JESD220H Section 10.7.8 (WRITE ATTRIBUTE), Section 14.3 (bBootLunEn)\n\n---"
+        },
+        {
+          "step_id": "step_0_3",
+          "name": "寫入測試資料至 Boot W-LUN",
+          "scsi_cmd": "WRITE(10) (2Ah)",
+          "ufs_query": null,
+          "opcode": "0x2A",
+          "query_opcode": null,
+          "idn": null,
+          "expected": "",
+          "fail_condition": null,
+          "on_fail": null,
+          "produces": [],
+          "consumes": [],
+          "raw_content": "**SCSI CMD**: `WRITE(10) (2Ah)`\n\n**目的**: 將已知測試 Pattern 資料寫入 Boot W-LUN，作為後續 Reset 壓力後的比對基準。\n\n| Field | Value |\n|-------|-------|\n| Opcode | 0x2A |\n| LUN | Boot W-LUN（0xB0 = BOOT_WELL_KNOWN_LU_A 或 0xB1 = BOOT_WELL_KNOWN_LU_B） |\n| LBA | 0x00000000 |\n| Transfer Length | 依據測試資料大小（N blocks） |\n| DPO | 0 |\n| FUA | 0 |\n| FUA_NV | 0 |\n\n**備註**: Boot W-LUN 位址參照 JESD220H Section 10.6.5（Well-Known Logical Units）。\n\n**UFS SPEC Reference**: JESD220H Section 11.4.2 (WRITE(10)), Section 10.6.5 (Boot W-LUN)\n\n---"
+        },
+        {
+          "step_id": "step_1_1",
+          "name": "執行隨機 Reset",
+          "scsi_cmd": null,
+          "ufs_query": null,
+          "opcode": null,
+          "query_opcode": null,
+          "idn": null,
+          "expected": "",
+          "fail_condition": null,
+          "on_fail": null,
+          "produces": [],
+          "consumes": [],
+          "raw_content": "**UFS OPERATION**: Reset\n\n**目的**: 對裝置執行隨機選取的 Reset 類型，模擬真實應用中可能遇到的各種 Reset 情境，驗證 Boot 資料的持久性。\n\n| Field | Value |\n|-------|-------|\n| Reset Type | 隨機選取：HW_RESET / RST_n / EndPoint Reset / UniPro Reset |\n| 選取方式 | 每次迴圈迭代從四種 Reset 類型中均勻隨機選取 |\n\n**Reset 類型說明**：\n\n| Reset 類型 | 說明 |\n|:---|:---|\n| HW_RESET | 硬體電源重置（Power cycle），模擬斷電重啟 |\n| RST_n | 硬體 Reset 腳位觸發 |\n| EndPoint Reset | UFS EndPoint 層級 Reset（DME_ENDPOINTRESET） |\n| UniPro Reset | UniPro 鏈路層級 Reset（DME_LINKSTARTUP / DME_RESET） |\n\n**UFS SPEC Reference**: JESD220H Section 10.8 (Reset), Section 10.4 (UFS Transport Protocol)\n\n---"
+        },
+        {
+          "step_id": "step_2_1",
+          "name": "確認裝置初始化完成",
+          "scsi_cmd": null,
+          "ufs_query": "READ FLAG",
+          "opcode": null,
+          "query_opcode": "0x01 (READ FLAG)",
+          "idn": null,
+          "expected": "",
+          "fail_condition": null,
+          "on_fail": null,
+          "produces": [],
+          "consumes": [],
+          "raw_content": "**UFS QUERY**: `READ FLAG` — fDeviceInit (IDN 0x01)\n\n**目的**: Reset 後查詢 fDeviceInit 旗標，確認裝置已完成初始化並進入就緒狀態，再進行後續 Boot 資料存取。\n\n| Field | Value |\n|-------|-------|\n| Query Opcode | 0x01 (READ FLAG) |\n| Flag IDN | 0x01 (fDeviceInit) |\n| Selector | 0x00 |\n\n**備註**: 若 fDeviceInit == 1，表示裝置仍在初始化中，需等待後重新查詢。建議以 polling 方式等待至 fDeviceInit == 0。\n\n**UFS SPEC Reference**: JESD220H Section 10.7.8.1 (READ FLAG), Section 14.2 (fDeviceInit)\n\n---"
+        },
+        {
+          "step_id": "step_2_2",
+          "name": "讀取 Boot W-LUN 並比對資料",
+          "scsi_cmd": "READ(10) (28h)",
+          "ufs_query": null,
+          "opcode": "0x28",
+          "query_opcode": null,
+          "idn": null,
+          "expected": "",
+          "fail_condition": null,
+          "on_fail": null,
+          "produces": [],
+          "consumes": [],
+          "raw_content": "**SCSI CMD**: `READ(10) (28h)`\n\n**目的**: 讀取 Boot W-LUN 中的資料，與 Step 0.3 寫入的原始測試 Pattern 進行逐 byte 比對，確認 Reset 後資料完整性。\n\n| Field | Value |\n|-------|-------|\n| Opcode | 0x28 |\n| LUN | Boot W-LUN（與 Step 0.3 相同） |\n| LBA | 0x00000000 |\n| Transfer Length | 與 Step 0.3 相同（N blocks） |\n| RARC | 0 |\n\n**比對邏輯**: 將 READ(10) 回傳的資料與 Step 0.3 寫入的原始測試 Pattern 逐 byte 比對。\n\n**UFS SPEC Reference**: JESD220H Section 11.4.1 (READ(10)), Section 10.6.5 (Boot W-LUN)\n\n---"
+        }
+      ],
+      "inputs": [],
+      "outputs": []
+    }
+  ],
+  "dependency_graph": {
+    "nodes": [
+      "loop_0"
+    ],
+    "edges": [
+      {
+        "from": "phase_0",
+        "to": "phase_1",
+        "type": "sequential",
+        "data_flow": [
+          "boot_lun_id",
+          "write_pattern",
+          "written_lba_start",
+          "written_transfer_length"
+        ]
+      },
+      {
+        "from": "phase_1",
+        "to": "phase_2",
+        "type": "sequential",
+        "data_flow": [
+          "boot_lun_id",
+          "write_pattern",
+          "written_lba_start",
+          "written_transfer_length"
+        ]
+      }
+    ]
+  }
+}

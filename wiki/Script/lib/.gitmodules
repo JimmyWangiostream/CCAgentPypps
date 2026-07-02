@@ -1,3 +1,0 @@
-[submodule "sdk_lib/user/sdk_dll"]
-	path = sdk_lib/user/sdk_dll
-	url = http://192.168.1.154/d5s/d5s3/release/sdk/ufs/library/phison/sdk_dll

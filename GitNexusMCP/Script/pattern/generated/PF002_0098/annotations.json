@@ -1,0 +1,59 @@
+{
+  "phases": [
+    {
+      "phase_id": "phase_0",
+      "inputs": [],
+      "outputs": ["boot_lun_id", "b_boot_enable_value"],
+      "steps": [
+        {
+          "step_id": "step_0_1",
+          "produces": [],
+          "consumes": []
+        },
+        {
+          "step_id": "step_0_2",
+          "produces": [],
+          "consumes": []
+        },
+        {
+          "step_id": "step_0_3",
+          "produces": ["write_pattern", "written_lba_start", "written_transfer_length"],
+          "consumes": ["boot_lun_id"]
+        }
+      ]
+    },
+    {
+      "phase_id": "phase_1",
+      "inputs": [],
+      "outputs": [],
+      "steps": [
+        {
+          "step_id": "step_1_1",
+          "produces": [],
+          "consumes": []
+        }
+      ]
+    },
+    {
+      "phase_id": "phase_2",
+      "inputs": ["write_pattern", "written_lba_start", "written_transfer_length", "boot_lun_id"],
+      "outputs": ["compare_result"],
+      "steps": [
+        {
+          "step_id": "step_2_1",
+          "produces": [],
+          "consumes": []
+        },
+        {
+          "step_id": "step_2_2",
+          "produces": ["compare_result"],
+          "consumes": ["write_pattern", "written_lba_start", "written_transfer_length", "boot_lun_id"]
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {"from": "phase_0", "to": "phase_1", "type": "sequential", "data_flow": ["boot_lun_id", "write_pattern", "written_lba_start", "written_transfer_length"]},
+    {"from": "phase_1", "to": "phase_2", "type": "sequential", "data_flow": ["boot_lun_id", "write_pattern", "written_lba_start", "written_transfer_length"]}
+  ]
+}

@@ -1,6 +1,6 @@
 # PF010_0310 IR Debug Report
 
-**Pattern**: PF010_0310_WriteBooster_SSU_Rst-Normalized-TestFlow
+**Pattern**: PF010_0310_Write-Booster-SSU-Rst-Normalized-TestFlow
 **Pattern ID**: PF010_0310
 
 ---
@@ -9,51 +9,42 @@
 
 | Phase | Type | Steps | Loop Info |
 |-------|------|-------|-----------|
-| phase_0 | sequential | 6 |  |
-| loop_4 | loop | 14 | until: None |
+| phase_0 | sequential | 2 |  |
+| loop_1 | loop | 13 | until: None |
 
 **Fail Condition 識別**:
 
-- `step_1_4`: Expected ``GOOD Status`, `Data Match`` → 含條件式關鍵字 → `fail_condition` 加入
-- `step_2_3`: Expected ``GOOD Status`, `Data Match`` → 含條件式關鍵字 → `fail_condition` 加入
 
 ---
 
 ## Stage 2 — Wiki 查詢結果
 
-### phase_0 — WB 初始化配置
+### phase_0 — Pre-condition: Write Booster Buffer Configuration
 
 | 參考 Wiki Chapter | 標題 |
 |------------------|------|
 | `concepts/ffu.md` | FFU — Field Firmware Update |
-| `concepts/psa.md` | PSA — Production State Awareness |
-| `concepts/exception-events.md` | Exception Events |
 | `concepts/thin-provisioning.md` | Thin Provisioning and UNMAP |
-| `concepts/refresh.md` | Refresh Operation |
-| `concepts/pattern-health-report.md` | Pattern: Health Report Implementation Guide |
-| `entities/lun.md` | LUN — Logical Unit Number |
-| `entities/scsi-commands.md` | UFS SCSI Commands (UCS) |
 | `entities/device-descriptor.md` | Device Descriptor (IDN 00h) |
 | `entities/unit-descriptor.md` | Unit Descriptor (IDN 02h) |
 | `entities/configuration-descriptor.md` | Configuration Descriptor (IDN 01h) |
-| `entities/rpmb.md` | RPMB — Replay Protected Memory Block |
 
-### loop_4 — Burn-in
+### loop_1 — Burn-in Loop
 
 | 參考 Wiki Chapter | 標題 |
 |------------------|------|
 | `concepts/refresh.md` | Refresh Operation |
 | `concepts/ffu.md` | FFU — Field Firmware Update |
-| `concepts/psa.md` | PSA — Production State Awareness |
-| `concepts/exception-events.md` | Exception Events |
-| `concepts/pattern-inhibition-time.md` | Pattern: Inhibition Time Implementation Guide |
+| `concepts/thin-provisioning.md` | Thin Provisioning and UNMAP |
+| `concepts/background-operations.md` | Background Operations (BKOPS) |
 | `concepts/pattern-rpmb.md` | Pattern: RPMB Implementation Guide |
 | `entities/flags.md` | UFS Flags |
+| `entities/attributes.md` | UFS Attributes |
 | `entities/scsi-commands.md` | UFS SCSI Commands (UCS) |
-| `entities/device-health-descriptor.md` | Device Health Descriptor (IDN 09h) |
 | `entities/unit-descriptor.md` | Unit Descriptor (IDN 02h) |
+| `entities/write-booster.md` | Write Booster |
+| `entities/inhibition-timeout.md` | Inhibition Timeout |
 | `entities/device-descriptor.md` | Device Descriptor (IDN 00h) |
-| `entities/upiu.md` | UPIU Types |
 
 ---
 
@@ -63,36 +54,31 @@
 
 | Edge | data_flow |
 |------|-----------|
-| phase_0 → loop_4 | max_lba |
+| phase_0 → loop_1 | max_capacity_lun, max_alloc_units |
 
 ### Phase inputs / outputs
 
 | Phase | inputs | outputs |
 |-------|--------|---------|
-| phase_0 | — | max_lba, max_alloc_units, wb_supported |
-| loop_4 | max_lba | — |
+| phase_0 | — | max_capacity_lun, wb_support, config_descriptor_data, max_alloc_units |
+| loop_1 | max_capacity_lun, max_alloc_units | — |
 
 ### Step-level data flow (produces / consumes)
 
 | Step | produces | consumes |
 |------|----------|----------|
-| step_0_1 | — | — |
-| step_0_2 | max_lba | — |
-| step_0_3 | wb_supported | — |
-| step_0_4 | max_alloc_units | — |
-| step_0_5 | config_descriptor_data | — |
-| step_0_6 | — | max_alloc_units, config_descriptor_data |
-| step_1_1 | — | — |
-| step_1_2 | — | — |
-| step_1_3 | write_lba, write_len, write_data | max_lba |
-| step_1_4 | — | write_lba, write_len, write_data |
-| step_1_5 | — | — |
-| step_1_6 | — | — |
-| step_2_1 | write_lba, write_len, write_data | max_lba |
-| step_2_2 | — | — |
-| step_2_3 | — | write_lba, write_len, write_data |
+| step_0_1 | max_capacity_lun, wb_support | — |
+| step_0_2 | config_descriptor_data, max_alloc_units | max_capacity_lun, wb_support |
+| step_1_1 | — | max_capacity_lun |
+| step_1_2 | write_record_p1 | max_capacity_lun |
+| step_1_3 | — | write_record_p1 |
+| step_1_4 | — | — |
+| step_2_1 | — | max_capacity_lun |
+| step_2_2 | write_record_p2 | max_capacity_lun |
+| step_2_3 | — | write_record_p2 |
 | step_2_4 | — | — |
-| step_2_5 | — | — |
+| step_3_1 | — | max_capacity_lun |
+| step_3_2 | — | — |
 | step_3_3 | — | — |
-| step_3_4 | — | — |
+| step_3_4 | — | max_capacity_lun |
 | step_3_5 | — | — |

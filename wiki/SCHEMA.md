@@ -10,6 +10,9 @@ Based on LLM Wiki pattern with integrated conflict resolution.
 4. **Script/** - Pattern code examples (raw, immutable)
 5. **ProNoun/** - Terminology definitions (raw, immutable)
 6. **ModelDefault/** - Auto-generated defaults (raw, immutable)
+7. **VC/** - Verification Criteria: per-pattern test specs (criterion + checkpoints +
+   expected results). Consumed by `wiki_retrieval/vc.py` — surfaced as a retrieval band at
+   generation and injected as checkpoints at review (no frontmatter; layer forced to `vc`).
 
 ## Conflict Resolution Rules
 

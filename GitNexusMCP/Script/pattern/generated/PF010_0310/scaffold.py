@@ -7,8 +7,8 @@ import Script.api.cmd_seq as ExecuteCMD
 # @@EXTRA_IMPORTS@@
 
 
-class PF010_0310_WriteBooster_SSU_Rst(UFSTC):
-    """PF010_0310 — PF010_0310_WriteBooster_SSU_Rst-Normalized-TestFlow"""
+class PF010_0310_Write_Booster_SSU_Rst(UFSTC):
+    """PF010_0310 — PF010_0310_Write-Booster-SSU-Rst-Normalized-TestFlow"""
 
     def pre_process(self) -> None:
         pass  # TODO human-confirm: pre-test device setup
@@ -20,4 +20,4 @@ class PF010_0310_WriteBooster_SSU_Rst(UFSTC):
 
 
 if __name__ == '__main__':
-    PF010_0310_WriteBooster_SSU_Rst().run()
+    PF010_0310_Write_Booster_SSU_Rst().run()

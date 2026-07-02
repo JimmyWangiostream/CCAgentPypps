@@ -1,6 +1,7 @@
 ---
 type: concept
 title: "Pattern: APL System Rebuild Implementation Guide"
+aliases: [apl-rebuild]
 tags: [pattern, script, implementation, apl, rebuild, uecc, hecc, spor, system-table]
 sources: [script, spec, modeldefault]
 created: 2026-06-21

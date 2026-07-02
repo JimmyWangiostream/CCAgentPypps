@@ -2,40 +2,98 @@
   "phases": [
     {
       "phase_id": "phase_0",
+      "type": "sequential",
       "inputs": [],
-      "outputs": ["max_lba", "max_alloc_units", "wb_supported"],
+      "outputs": ["max_capacity_lun", "wb_support", "config_descriptor_data", "max_alloc_units"],
       "steps": [
-        {"step_id": "step_0_1", "produces": [], "consumes": []},
-        {"step_id": "step_0_2", "produces": ["max_lba"], "consumes": []},
-        {"step_id": "step_0_3", "produces": ["wb_supported"], "consumes": []},
-        {"step_id": "step_0_4", "produces": ["max_alloc_units"], "consumes": []},
-        {"step_id": "step_0_5", "produces": ["config_descriptor_data"], "consumes": []},
-        {"step_id": "step_0_6", "produces": [], "consumes": ["max_alloc_units", "config_descriptor_data"]}
+        {
+          "step_id": "step_0_1",
+          "produces": ["max_capacity_lun", "wb_support"],
+          "consumes": []
+        },
+        {
+          "step_id": "step_0_2",
+          "produces": ["config_descriptor_data", "max_alloc_units"],
+          "consumes": ["max_capacity_lun", "wb_support"]
+        }
       ]
     },
     {
-      "phase_id": "loop_4",
-      "inputs": ["max_lba"],
+      "phase_id": "loop_1",
+      "type": "loop",
+      "loop_count": 10,
+      "inputs": ["max_capacity_lun", "max_alloc_units"],
       "outputs": [],
       "steps": [
-        {"step_id": "step_1_1", "produces": [], "consumes": []},
-        {"step_id": "step_1_2", "produces": [], "consumes": []},
-        {"step_id": "step_1_3", "produces": ["write_lba", "write_len", "write_data"], "consumes": ["max_lba"]},
-        {"step_id": "step_1_4", "produces": [], "consumes": ["write_lba", "write_len", "write_data"]},
-        {"step_id": "step_1_5", "produces": [], "consumes": []},
-        {"step_id": "step_1_6", "produces": [], "consumes": []},
-        {"step_id": "step_2_1", "produces": ["write_lba", "write_len", "write_data"], "consumes": ["max_lba"]},
-        {"step_id": "step_2_2", "produces": [], "consumes": []},
-        {"step_id": "step_2_3", "produces": [], "consumes": ["write_lba", "write_len", "write_data"]},
-        {"step_id": "step_2_4", "produces": [], "consumes": []},
-        {"step_id": "step_2_5", "produces": [], "consumes": []},
-        {"step_id": "step_3_3", "produces": [], "consumes": []},
-        {"step_id": "step_3_4", "produces": [], "consumes": []},
-        {"step_id": "step_3_5", "produces": [], "consumes": []}
+        {
+          "step_id": "step_1_1",
+          "produces": [],
+          "consumes": ["max_capacity_lun"]
+        },
+        {
+          "step_id": "step_1_2",
+          "produces": ["write_record_p1"],
+          "consumes": ["max_capacity_lun"]
+        },
+        {
+          "step_id": "step_1_3",
+          "produces": [],
+          "consumes": ["write_record_p1"]
+        },
+        {
+          "step_id": "step_1_4",
+          "produces": [],
+          "consumes": []
+        },
+        {
+          "step_id": "step_2_1",
+          "produces": [],
+          "consumes": ["max_capacity_lun"]
+        },
+        {
+          "step_id": "step_2_2",
+          "produces": ["write_record_p2"],
+          "consumes": ["max_capacity_lun"]
+        },
+        {
+          "step_id": "step_2_3",
+          "produces": [],
+          "consumes": ["write_record_p2"]
+        },
+        {
+          "step_id": "step_2_4",
+          "produces": [],
+          "consumes": []
+        },
+        {
+          "step_id": "step_3_1",
+          "produces": [],
+          "consumes": ["max_capacity_lun"]
+        },
+        {
+          "step_id": "step_3_2",
+          "produces": [],
+          "consumes": []
+        },
+        {
+          "step_id": "step_3_3",
+          "produces": [],
+          "consumes": []
+        },
+        {
+          "step_id": "step_3_4",
+          "produces": [],
+          "consumes": ["max_capacity_lun"]
+        },
+        {
+          "step_id": "step_3_5",
+          "produces": [],
+          "consumes": []
+        }
       ]
     }
   ],
   "edges": [
-    {"from": "phase_0", "to": "loop_4", "type": "sequential", "data_flow": ["max_lba"]}
+    {"from": "phase_0", "to": "loop_1", "type": "sequential", "data_flow": ["max_capacity_lun", "max_alloc_units"]}
   ]
 }

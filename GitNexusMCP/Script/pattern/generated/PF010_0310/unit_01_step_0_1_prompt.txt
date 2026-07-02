@@ -34,6 +34,21 @@ STANDARD IMPORTS ALREADY IN SCAFFOLD (do NOT repeat):
   from Script.pattern.pattern_logger import logger
   import Script.api.cmd_seq as ExecuteCMD
 
+## Namespace rule (AUTHORITATIVE — deterministic; the gate enforces it)
+The scaffold binds EXACTLY three Script namespaces. Prefix every Script symbol by
+where its `def`/`class` LIVES (its defining file path):
+  - Script/api/cmd_seq/**            -> ExecuteCMD.<name>
+  - Script/api/** (everything else)  -> api.<name>   (enums too: api.FlagIDN, api.Dcmd5ResetType)
+  - Script/lib/**                    -> lib.<name>
+Reference patterns/idioms use `from Script.api.ufs_api import *`, so they show BARE
+names (e.g. `init_tester_to_unit_ready(...)`). The scaffold has NO star import — you
+MUST re-prefix every bare symbol per its defining path (-> `api.init_tester_to_unit_ready(...)`).
+Never write a bare Script symbol and never guess a different prefix.
+Script/project_api/** and Script/pattern/** are NOT bound by the scaffold — to use one,
+add an explicit import in === EXTRA IMPORTS ===.
+Logging: the scaffold provides `logger` — use `logger.info/...`; `_log` does NOT exist.
+Stdlib modules you use (e.g. `time`) MUST be imported in === EXTRA IMPORTS ===.
+
 STRUCTURE RULES:
 - This unit MUST become EXACTLY ONE method. See "STRUCTURE (this unit)" below for the
   exact method name/signature and whether it is a stepN method or a loop helper.
@@ -45,13 +60,17 @@ STRUCTURE RULES:
   any unresolved API write:
     logger.warning("TODO human-confirm: <what is unresolved>")
     # TODO human-confirm: <symbol or operation that needs verification>
+- Do NOT substitute a name-similar SINGLE API for a multi-step PROCEDURE (e.g. selecting the
+  max-capacity LUN is enumerate→read→pick, not `get_max_number_of_lun()`). If no grounded API
+  implements the intent, emit the TODO human-confirm above — never fabricate a value/derivation.
 - Reuse helper methods already defined upstream (listed below); do NOT redefine them.
 
 GROUNDING (MANDATORY before writing any API call):
   CODE  → Use the gitnexus MCP server (it has indexed the Script/ codebase):
            call the `query` tool with DOMAIN KEYWORDS to get the top-5 candidate
            symbols; use `context` to confirm a symbol's callers/callees and real
-           signature before writing the call. Do NOT assume a naming prefix.
+           signature before writing the call. Prefix per the NAMESPACE RULE above
+           (deterministic — derived from the symbol's defining path).
            Script/ layout — pick the right folder:
              - Script/project_api/ : this project's CUSTOMER api — prefer for
                                      customer-specific behaviour.
@@ -78,6 +97,22 @@ GROUNDING (MANDATORY before writing any API call):
            - Do NOT call any symbol you have not confirmed exists via gitnexus
              `context`. If you cannot confirm it, do not guess — emit
              TODO-REVIEW-NO-CODE-REF and tag the call # TODO human-confirm.
+
+           IDIOM & SELECTION (which sibling is RIGHT — anti-conflation finds param
+           confusion; this finds the wrong-API-chosen trap, e.g. WriteBooster support):
+           - gitnexus `query` returns more than candidate NAMES — it returns PROCESSES
+             (real call chains) and `Script/pattern/sample_code/` + real `Script/pattern/`
+             files. USE THEM. When 2+ siblings look plausible (e.g. get_device_descriptor
+             vs get_extended_ufs_features_support vs get_extended_write_booster_support),
+             do NOT pick by name similarity or by rank1. READ a real caller / sample_code
+             that performs THIS operation and copy the idiom it uses.
+           - The protocol PATH is the test: a feature *support* check reads
+             `get_extended_ufs_features_support().u8_write_booster` (READ ATTRIBUTE
+             dExtendedUFSFeaturesSupport) — NOT a Device Descriptor buffer-type field and
+             NOT the FFU bit. Confirm which field/struct the real idiom reads, not just that
+             a similarly-named getter exists.
+           - Prefer copying a worked idiom from `Script/pattern/sample_code/` or a real
+             `Script/pattern/` caller over assembling a call from a bare signature.
   WIKI  → Use ONLY the injected "Wiki references" block below (RRF top-5 + essence);
            do not free-read the wiki. Conflict overrides shown there WIN
            (Rule 1 CustomerReq>Spec, Rule 2 UserPrompt>ModelDefault — two independent
@@ -88,78 +123,269 @@ PROVENANCE:
   If a REVIEW FLAG applies, also put it as an inline comment on the FIRST line of the
   stepN method body (e.g. `# TODO-REVIEW-NO-CODE-REF`) so reviewers can grep it.
 
-Pattern: PF010_0310 — PF010_0310_WriteBooster_SSU_Rst-Normalized-TestFlow
+Pattern: PF010_0310 — PF010_0310_Write-Booster-SSU-Rst-Normalized-TestFlow
 
-Unit 1 — step step_0_1 (確認裝置就緒) of phase phase_0 (WB 初始化配置)
+Unit 1 — step step_0_1 (檢查 Write Booster 支援能力) of phase phase_0 (Pre-condition: Write Booster Buffer Configuration)
 
 Method name: step1  (ONE method for this single step)
 
 STRUCTURE (this unit): emit EXACTLY ONE method named stepN (exactly as 'Method name' states). `process()` auto-runs stepN methods in order — any other name = dead code.
 
+## Target UFS version: 4.1 (AUTHORITATIVE)
+Generate for UFS 4.1. Use ONLY APIs / struct fields available on this version; do NOT use a symbol that exists only on a newer spec. The versioned structs for this target are the `*410` classes (e.g. DeviceDescriptor410).
+
+self.* CONTRACT — you MUST set these (consumed downstream): self.max_capacity_lun, self.wb_support
+
 ## Step(s) in this unit
 [
   {
     "step_id": "step_0_1",
-    "name": "確認裝置就緒",
-    "scsi_cmd": "TEST UNIT READY (00h)",
-    "ufs_query": null,
-    "opcode": "0x00",
+    "name": "檢查 Write Booster 支援能力",
+    "scsi_cmd": null,
+    "ufs_query": "READ DESCRIPTOR (0x07)",
+    "opcode": null,
     "query_opcode": null,
-    "idn": null,
-    "expected": "`GOOD Status`",
+    "idn": "0x00 (Device Descriptor)",
+    "expected": "",
     "fail_condition": null,
     "on_fail": null,
-    "produces": [],
+    "produces": [
+      "max_capacity_lun",
+      "wb_support"
+    ],
     "consumes": [],
-    "raw_content": "**SCSI CMD**: `TEST UNIT READY (00h)`\n\n| Field | Value |\n|-------|-------|\n| Opcode | 0x00 |\n\n**Expected**: `GOOD Status`。\n\n---"
+    "raw_content": "**UFS QUERY**: `READ DESCRIPTOR (0x07)` — Device Descriptor (IDN 0x00)\n\n**目的**: 讀取 Device Descriptor，確認裝置是否支援 Write Booster 功能，並取得最大 Buffer 配置能力資訊。\n\n| Field | Value |\n|-------|-------|\n| Opcode (Query) | 0x07 (READ DESCRIPTOR) |\n| IDN | 0x00 (Device Descriptor) |\n| Selector | 0x00 |\n| Index | 0x00 |\n| Length | Descriptor 實際長度（依 bLength 而定） |\n\n**UFS SPEC Reference**: JESD220H Section 10.7.9 (READ DESCRIPTOR), Section 14.1.1 (Device Descriptor)\n\n---"
   }
 ]
 
 ## Wiki references (RRF top-5) — ground domain facts here; conflict overrides WIN
 top-5:
 - concepts/ffu.md (rank1)
-- entities/lun.md (rank2)
-- concepts/psa.md (rank3)
-- entities/scsi-commands.md (rank4)
-- concepts/thin-provisioning.md (rank5)
-## Wiki essence — query: TEST UNIT READY (00h) 確認裝置就緒
+- entities/device-descriptor.md (rank2)
+- concepts/exception-events.md (rank3)
+## Wiki essence — query: READ DESCRIPTOR (0x07) 檢查 Write Booster 支援能力 0x00 (Device Descriptor)
 principles (concepts):
 - FFU — Field Firmware Update: Field Firmware Update (FFU) is the UFS mechanism for delivering new firmware to a device in the field without physical access to the flash. FFU is supported when `bUFSFeaturesSupport bit[0] = 1` in the Device Descriptor  (concepts/ffu.md)
-- PSA — Production State Awareness: UFS devices can utilize knowledge about their production status and adjust internal operations accordingly. Content loaded into the storage device prior to device soldering might be corrupted at a higher probability than (concepts/psa.md)
-- Thin Provisioning and UNMAP: Thin Provisioning is a UFS LU-level configuration that allows the host to de-allocate logical blocks, notifying the device that certain LBA ranges are no longer in use. This enables the device to reclaim physical NAND re (concepts/thin-provisioning.md)
+- Exception Events: Exception Events are an asynchronous notification mechanism allowing the device to alert the host to conditions requiring attention. The device signals an event by setting `EVENT_ALERT` in the RESPONSE UPIU Device Inform (concepts/exception-events.md)
+- Refresh Operation: The Refresh operation relocates data to mitigate NAND retention degradation. It is supported when `dExtendedUFSFeaturesSupport bit[3] = 1` (Device Descriptor offset 4Fh–52h) and `bUFSFeaturesSupport bit[3] = 1` (offset 1 (concepts/refresh.md)
 entities:
-- LUN — Logical Unit Number: A logical storage partition within a UFS device. Multiple LUNs can coexist on one device, each with its own capacity, memory type, provisioning behavior, and access permissions. (entities/lun.md)
-- UFS SCSI Commands (UCS): The UFS Command Set (UCS) is a subset of SCSI commands transported via COMMAND UPIU. All CDBs are fixed-length (maximum 16 bytes). The CONTROL byte in every CDB is always 00h. (entities/scsi-commands.md)
-- UPIU Types: UPIU (UFS Protocol Information Unit) is the fundamental transport unit of the UFS Transport Protocol (UTP) layer. All host-device communication uses UPIUs. (entities/upiu.md)
-- PSA State: The `bPSAState` attribute (IDN 15h) tracks the current phase of the Production State Awareness (PSA) flow. Transitions are one-directional and irreversible once the device is soldered. PSA enables secure pre-loading of d (entities/psa-state.md)
-- Inhibition Timeout: The duration (in seconds) a UFS device waits in idle before entering inhibition mode. During the inhibition window, background (BG) tasks — including Garbage Collection, Media Scan, Read Disturb scans, HIR, HID, and Refr (entities/inhibition-timeout.md)
+- Device Descriptor (IDN 00h): The Device Descriptor is the top-level descriptor of a UFS device. It identifies the manufacturer, product, spec version, LU count, and device capabilities. It is read-only and accessed via QUERY REQUEST with OPCODE=01h  (entities/device-descriptor.md)
+- Configuration Descriptor (IDN 01h): The Configuration Descriptor defines how the UFS device is partitioned into Logical Units. It is writable before `bConfigDescrLock` is set, and contains per-LU provisioning parameters for up to 8 LUs per configuration bl (entities/configuration-descriptor.md)
+- Write Booster: A UFS performance feature that uses a portion of TLC/QLC NAND in SLC mode as a write buffer. Improves sustained write performance by absorbing bursts before data is migrated to TLC/QLC. (entities/write-booster.md)
 reference expansion:
-- entities/upiu.md
-- entities/psa-state.md
-- entities/lun.md  ← referenced by concepts/psa.md
-- entities/inhibition-timeout.md
-authority overrides (conflicts win):
-- [Rule 1 (CustomerReq vs Spec → CustomerReq WINS)] WriteBooster LUN Restriction → affects [[write-booster]], [[lun]], [[attributes]], [[flags]]
-- [Rule 2 (UserPrompt vs ModelDefault → UserPrompt WINS)] Default LUN Selection → affects [[lun]], [[modeldefault]], [[conflicts]]
+- entities/device-descriptor.md  ← referenced by concepts/ffu.md
+- entities/write-booster.md  ← referenced by concepts/exception-events.md
+- entities/configuration-descriptor.md
+
+## Canonical idioms (AUTHORITATIVE — enforced by the gate; these OVERRIDE any contradicting protocol path / field named in the step above. Follow them exactly)
+- WriteBooster support MUST be read via api.get_extended_ufs_features_support().u8_write_booster — NOT u0_ffu (that is the FFU bit) and NOT a Device Descriptor buffer-type field.
+
+## Procedure idioms (AUTHORITATIVE — this intent is a multi-step procedure, NOT a single API; do NOT substitute a name-similar single call)
+- Selecting the MaxCapacity Enabled LUN is a PROCEDURE, not a single API. Do NOT substitute a name-similar single call — e.g. `api.get_max_number_of_lun()` returns the LUN COUNT, not a capacity, and `count - 1` is a fabrication. Instead: enumerate the enabled Normal LUNs (Unit Descriptor `b3_lu_enable`), read each via `api.get_unit_descriptor(unit_index)`, and pick the LUN whose allocated-size field (see the injected Unit Descriptor fields) is largest. If you cannot ground the exact field, emit `logger.warning("TODO human-confirm: max-capacity LUN field")` — never fabricate a value.
+
+## Candidate API facts (CROSS-CHECK only — retrieved heuristically; may name sibling or wrong-layer symbols). PRIMARY = the signature you confirm via gitnexus `context` on the symbol YOU selected; if these conflict with gitnexus `context`, trust gitnexus. Do NOT copy a fact for a symbol you did not choose, and never invent a signature or enum)
+- ExtendedUFSFeaturesSupportUnion fields (from get_extended_ufs_features_support()): l26_rsvd, q10_rsvd, q18_rsvd, u0_ffu, u10_adv_rpmb, u11_rsvd, u12_device_level_exception_warning, u12_rsvd, u13_hid, u13_rsvd, u14_barrier, u15_clear_error_history_functionality, u16_ext_iid, u17_rsvd, u18_fast_recovery_mode, u18_rsvd, u19_rpmb_authenticated_vendor_cmd, u1_psa, u20_rsvd, u2_device_life_span, u3_refresh_op, u4_too_high_temp, u5_too_low_temp, u6_extended_temp, u7_rsvd, u8_write_booster, u9_performance_throttling, w30_rsvd
+- ExtendedWriteBoosterSupportUnion fields (from get_extended_write_booster_support()): u0_write_booster_buffer_resize, u1_fifo_partial_flush_mode, u2_pinned_partial_flush_mode
+- api.LUNWriteProtect valid members: NOT_WRITE_PROTECTED, PERMANENT_WRITE_PROTECT, POWER_ON_WRITE_PROTECT
+- api.MaxNumberLUN valid members: AMOUNT_32, AMOUNT_8
+- api.SupportedWriteBoosterBufferType valid members: DEDICATED_AND_SHARED, DEDICATED_ONLY, SHARED_ONLY
+- api.SupportedWriteBoosterBufferUserSpaceType valid members: PRESERVE_USER_SPACE_ONLY, USER_SPACE_REDUCTION_AND_PRESERVE_USER_SPACE, USER_SPACE_REDUCTION_ONLY
+- api.WriteBoosterBufferFlushStatus valid members: COMPLETED, GENERAL_FAILURE, IDLE, IN_PROGRESS, STOPPED
+- api.WriteBoosterBufferPreserveUserSpaceEn valid members: DISABLE, ENABLE
+- api.WriteBoosterBufferType valid members: DEDICATED, SHARED
+- api.Dcmd5ReadBootData valid members: DIS, EN
+
+## Project defaults (default.md) — when the TC OMITS a detail, FOLLOW these (UserPrompt > ModelDefault). Do NOT hardcode a value these resolve (e.g. lun=0). Tag any use as `# src[wiki]: default.md`.
+# Project Defaults (default.md) — AUTO-GENERATED, do not hand-edit
+
+> Merge of ModelDefault (base) + UserPrompt (overrides) + CustomerReq constraints.
+> Priority: **UserPrompt > ModelDefault**. Apply these when the TC flow omits a detail.
+> Sources: wiki/UserPrompt/, wiki/ModelDefault/, wiki/conflicts.md (audit).
+> Regenerate: `python generate_pattern.py build-defaults`
+
+## (1) UserPrompt overrides — HIGHEST priority (use when TC is silent)
+# UserPrompt
+
+## 使用說明
+本文件用於制定使用者習慣的細節說明, 當TC沒有敘述到flow細節時, 參考這一份實作
+
+## 未指定時參照:
+- **LUN**：MaxCapacity的Enabled Lun
+
+_← UserPrompt (overrides ModelDefault)_
+
+## (2) CustomerReq constraints (Rule 1 — CustomerReq > Spec)
+- **WriteBooster LUN Restriction**: Reject WriteBooster Attribute/Flag writes on LUN > 7, Boot LUNs, or Well-Known LUNs with `invalid INDEX` response  _← CustomerReq_
+
+## (3) Resolved overrides (audit — from conflicts.md)
+- **Default LUN Selection**: ModelDefault ``TestNormalLun = 0` must NOT be used as default` SUPERSEDED → use `default LUN = MaxCapacity Enabled LUN`. When TC flow does not specify a LUN, the test framework shall enumerate all enabled Normal LUNs, read `dNumAllocUnits` from each Unit Descriptor, and select the LUN with the highest value  _← UserPrompt wins_
+
+
+## ModelDefault base (retrieved for this step; use only if TC AND UserPrompt are silent)
+
+### hardware_settings  _← ModelDefault_
+# Default Hardware Settings & Configuration
+
+Used when TC specifies hardware configuration but omits specific setting values.
+
+## HwSetting Field Defaults
+
+When modifying hardware settings without explicit values:
+
+```python
+# Most commonly configured settings (from Script patterns)
+
+# Inhibition Time (idle timeout)
+HwSettingField.INHIBITION_TIME = 180  # seconds
+
+# PSA (Production State Awareness) Configuration
+PSA_STATE = api.PSAState.PRE_SOLDERING  # Default after manufacturing
+PSA_DATA_SIZE = device_descriptor.l37_psa_max_data_size  # Use device max
+
+# Write Booster
+WRITEBOOSTER_ENABLED = True
+WRITEBOOSTER_BUFFER_SIZE = auto  # Use device default
+
+# Background Operations
+BKOPS_ENABLED = True
+BKOPS_FLUSH_ENABLE = True
+
+# Temperature Monitoring
+TEMPERATURE_THRESHOLD_HIGH = 85  # Celsius
+TEMPERATURE_THRESHOLD_LOW = 0    # Celsius
+
+# Cache Settings
+CACHE_MODE = WRITE_BACK  # Default cache policy
+CACHE_FLUSH_TIMEOUT = 30  # seconds
+```
+
+---
+
+## Device Descriptor Access
+
+When TC needs device info but doesn't specify what to read:
+
+```python
+# Default descriptor retrieval (safe to always do)
+device_desc = api.get_device_descriptor()
+geometry_desc = api.get_geometry_descriptor()
+fw_geometry = api.get_fw_geometry()
+
+# Common device info accessed:
+device_desc.l37_psa_max_data_size      # PSA capacity
+device_desc.bNumberLU                   # Number of logical units
+device_desc.bSecureRemovalType          # Secure erase support
+```
+
+**Spec Reference:** Section 14 (Descriptors, Flags and Attributes)
+
+---
+
+## Virtual Block (VB) Sizing
+
+When determining VB sizes for test operations:
+
+```python
+# Calculate from firmware geometry
+flash_setting = get_flash_setting()
+slc_vb_size = fw_geometry.l84_vb_size_u0 * 512 // 4096
+tlc_vb_size = fw_geometry.l88_vb_size_u1 * 512 // 4096
+
+# Safety margins
+exceed_size = 50  # Extra blocks beyond main VB capacity
+
+# Total test allocation
+total_test_size = slc_vb_size + exceed_size
+```
+
+---
+
+## LUN Configuration Defaults
+
+When configuring logical units for a test:
+
+```python
+# Standard LUN allocation (from VPCT test patterns)
+TestNormalLun = 0      # Primary data partition
+TestEM1Lun = 1         # Enhanced Memory 1 (extra reliable)
+TestWBLun = 2          # WriteBooster dedicated LUN
+TestGCLun = 3          # Garbage Collection area
+TestTemperatureLun = 4 # Temperature monitoring
+
+# LUN type defaults
+normal_lu_type = "General Purpose"
+em1_lu_type = "Enhanced Reliability"
+wb_lu_type = "WriteBooster Cache"
+
+# Common LU counts
+min_lun_required = 2   # At least data + EM1
+typical_lun_count = 5  # Data + EM1 + WB + GC + Temp
+max_lun_count = device_descriptor.bNumberLU  # Device maximum
+```
+
+---
+
+## RPMB Configuration
+
+When accessing RPMB (Replay Protected Memory Block) without details:
+
+```python
+# Default RPMB region and mode
+rpmb_region = RPMBRegion.REGION_0  # Always use region 0 by default
+
+# Key management
+rpmb_key = auto_generate_key()  # Generate random key for test
+rpmb_key_size = 32  # bytes (256-bit key)
+
+# Write counter reset
+clear_rpmb_key = True  # Clear and reset on init (safe default)
+
+# Operation mode
+rpmb_mode = "NORMAL"  # Use normal RPMB mode by default
+```
+
+**Spec Reference:** Section 12.4 (RPMB — Replay Protected Memory Block)
+
+---
+
+## Erase/Defect Management
+
+When configuring NAND management without specifics:
+
+```python
+# Flash defect handling
+bad_block_info = api.get_bad_block_information()  # Retrieve existing defects
+defragmentation_enabled = True  # Enable auto-defrag
+defrag_source_vp = auto  # Let firmware select VPs to defrag
+
+# Format operation defaults
+format_type = "QUICK_FORMAT"  # Fast format (no full erase)
+keep_user_data = False         # Erase all data unless specified
+
+# Rebuild operation
+auto_rebuild_on_error = True   # Auto-repair on detection
+```
 
 ## Full IR (for reference)
 {
   "pattern_id": "PF010_0310",
-  "title": "PF010_0310_WriteBooster_SSU_Rst-Normalized-TestFlow",
-  "description": "PF010_0310 Write Booster Reset Test — 驗證 WB Enable/Disable/Flush 狀態下",
+  "title": "PF010_0310_Write-Booster-SSU-Rst-Normalized-TestFlow",
+  "description": "驗證 Write Booster 啟用／退出期間，搭配隨機 Write/Read 與 Data Compare，",
   "tags": [
     "test-flow",
     "ufs",
     "pf010_0310",
     "scsi-cmd",
     "write-booster",
-    "reset",
-    "flush"
+    "ssu",
+    "por",
+    "reset"
   ],
+  "ufs_version": "",
   "phases": [
     {
       "phase_id": "phase_0",
-      "name": "WB 初始化配置",
+      "name": "Pre-condition: Write Booster Buffer Configuration",
       "type": "sequential",
       "loop_type": null,
       "loop_count": null,
@@ -167,116 +393,55 @@ authority overrides (conflicts win):
       "steps": [
         {
           "step_id": "step_0_1",
-          "name": "確認裝置就緒",
-          "scsi_cmd": "TEST UNIT READY (00h)",
-          "ufs_query": null,
-          "opcode": "0x00",
+          "name": "檢查 Write Booster 支援能力",
+          "scsi_cmd": null,
+          "ufs_query": "READ DESCRIPTOR (0x07)",
+          "opcode": null,
           "query_opcode": null,
-          "idn": null,
-          "expected": "`GOOD Status`",
+          "idn": "0x00 (Device Descriptor)",
+          "expected": "",
           "fail_condition": null,
           "on_fail": null,
-          "produces": [],
+          "produces": [
+            "max_capacity_lun",
+            "wb_support"
+          ],
           "consumes": [],
-          "raw_content": "**SCSI CMD**: `TEST UNIT READY (00h)`\n\n| Field | Value |\n|-------|-------|\n| Opcode | 0x00 |\n\n**Expected**: `GOOD Status`。\n\n---"
+          "raw_content": "**UFS QUERY**: `READ DESCRIPTOR (0x07)` — Device Descriptor (IDN 0x00)\n\n**目的**: 讀取 Device Descriptor，確認裝置是否支援 Write Booster 功能，並取得最大 Buffer 配置能力資訊。\n\n| Field | Value |\n|-------|-------|\n| Opcode (Query) | 0x07 (READ DESCRIPTOR) |\n| IDN | 0x00 (Device Descriptor) |\n| Selector | 0x00 |\n| Index | 0x00 |\n| Length | Descriptor 實際長度（依 bLength 而定） |\n\n**UFS SPEC Reference**: JESD220H Section 10.7.9 (READ DESCRIPTOR), Section 14.1.1 (Device Descriptor)\n\n---"
         },
         {
           "step_id": "step_0_2",
-          "name": "取得 LUN 容量",
-          "scsi_cmd": "READ CAPACITY(10) (25h)",
-          "ufs_query": null,
-          "opcode": "0x25",
+          "name": "設定 Write Booster Buffer 為 Shared 類型（最大配置）",
+          "scsi_cmd": null,
+          "ufs_query": "WRITE DESCRIPTOR (0x08)",
+          "opcode": null,
           "query_opcode": null,
-          "idn": null,
-          "expected": "`GOOD Status`，取得 MAX_LBA",
+          "idn": "0x01 (Configuration Descriptor)",
+          "expected": "",
           "fail_condition": null,
           "on_fail": null,
           "produces": [
-            "max_lba"
-          ],
-          "consumes": [],
-          "raw_content": "**SCSI CMD**: `READ CAPACITY(10) (25h)`\n\n| Field | Value |\n|-------|-------|\n| Opcode | 0x25 |\n| LUN | All LUNs |\n\n**Expected**: `GOOD Status`，取得 MAX_LBA。\n\n---"
-        },
-        {
-          "step_id": "step_0_3",
-          "name": "檢查 WB 支援",
-          "scsi_cmd": null,
-          "ufs_query": "READ ATTRIBUTE (dExtendedUFSFeaturesSupport)",
-          "opcode": null,
-          "query_opcode": "0x03 (READ ATTRIBUTE)",
-          "idn": "dExtendedUFSFeaturesSupport",
-          "expected": "`QUERY RESPONSE Success`，確認 WB bit 已 set",
-          "fail_condition": null,
-          "on_fail": null,
-          "produces": [
-            "wb_supported"
-          ],
-          "consumes": [],
-          "raw_content": "**UFS QUERY**: `READ ATTRIBUTE (dExtendedUFSFeaturesSupport)`\n\n| Field | Value |\n|-------|-------|\n| Query Opcode | 0x03 (READ ATTRIBUTE) |\n| IDN | dExtendedUFSFeaturesSupport |\n\n**Expected**: `QUERY RESPONSE Success`，確認 WB bit 已 set。\n\n---"
-        },
-        {
-          "step_id": "step_0_4",
-          "name": "讀取最大 WB Buffer",
-          "scsi_cmd": null,
-          "ufs_query": "READ ATTRIBUTE (dLUNumWriteBoosterBufferAllocUnits, IDN 0x17)",
-          "opcode": null,
-          "query_opcode": "0x03 (READ ATTRIBUTE)",
-          "idn": "0x17 (dLUNumWriteBoosterBufferAllocUnits — R/O)",
-          "expected": "`QUERY RESPONSE Success`，回傳 max alloc units",
-          "fail_condition": null,
-          "on_fail": null,
-          "produces": [
+            "config_descriptor_data",
             "max_alloc_units"
           ],
-          "consumes": [],
-          "raw_content": "**UFS QUERY**: `READ ATTRIBUTE (dLUNumWriteBoosterBufferAllocUnits, IDN 0x17)`\n\n| Field | Value |\n|-------|-------|\n| Query Opcode | 0x03 (READ ATTRIBUTE) |\n| IDN | 0x17 (dLUNumWriteBoosterBufferAllocUnits — R/O) |\n\n**Expected**: `QUERY RESPONSE Success`，回傳 max alloc units。\n\n**UFS SPEC Reference**: JESD220H Section 14.3.1 (dLUNumWriteBoosterBufferAllocUnits 為 Read-Only)\n\n---"
-        },
-        {
-          "step_id": "step_0_5",
-          "name": "讀取 Configuration Descriptor",
-          "scsi_cmd": null,
-          "ufs_query": "READ DESCRIPTOR (Configuration Descriptor)",
-          "opcode": null,
-          "query_opcode": "0x07 (READ DESCRIPTOR)",
-          "idn": "0x01 (Configuration Descriptor)",
-          "expected": "`QUERY RESPONSE Success`",
-          "fail_condition": null,
-          "on_fail": null,
-          "produces": [
-            "config_descriptor_data"
-          ],
-          "consumes": [],
-          "raw_content": "**UFS QUERY**: `READ DESCRIPTOR (Configuration Descriptor)`\n\n| Field | Value |\n|-------|-------|\n| Query Opcode | 0x07 (READ DESCRIPTOR) |\n| IDN | 0x01 (Configuration Descriptor) |\n| Index | 0x00 |\n| Selector | 0x00 |\n| Length | 0x40 |\n\n**Expected**: `QUERY RESPONSE Success`。\n\n---"
-        },
-        {
-          "step_id": "step_0_6",
-          "name": "配置 WB Buffer（Shared Type + MAX）",
-          "scsi_cmd": null,
-          "ufs_query": "WRITE DESCRIPTOR (Configuration Descriptor)",
-          "opcode": null,
-          "query_opcode": "0x08 (WRITE DESCRIPTOR)",
-          "idn": "0x01 (Configuration Descriptor)",
-          "expected": "`QUERY RESPONSE Success`",
-          "fail_condition": null,
-          "on_fail": null,
-          "produces": [],
           "consumes": [
-            "max_alloc_units",
-            "config_descriptor_data"
+            "max_capacity_lun",
+            "wb_support"
           ],
-          "raw_content": "**UFS QUERY**: `WRITE DESCRIPTOR (Configuration Descriptor)`\n\n**重要**: dLUNumWriteBoosterBufferAllocUnits 為唯讀 Attribute，必須透過 WRITE DESCRIPTOR (Configuration Descriptor) 設定。\n\n| Field | Value |\n|-------|-------|\n| Query Opcode | 0x08 (WRITE DESCRIPTOR) |\n| IDN | 0x01 (Configuration Descriptor) |\n| bWriteBoosterBufferType | 0x01 (Shared) |\n| dLUNumWriteBoosterBufferAllocUnits | MAX (from Step 0.4) |\n\n**Expected**: `QUERY RESPONSE Success`。\n\n---"
+          "raw_content": "**UFS QUERY**: `WRITE DESCRIPTOR (0x08)` — Configuration Descriptor (IDN 0x01)\n\n**目的**: 將 Write Booster Buffer 設定為 Shared 類型（所有 LU 共享），並配置最大支援的 Buffer Allocation Units 數量。\n\n| Field | Value |\n|-------|-------|\n| Opcode (Query) | 0x08 (WRITE DESCRIPTOR) |\n| IDN | 0x01 (Configuration Descriptor) |\n| Selector | 0x00 |\n| Index | 0x00 |\n| bWriteBoosterBufferType | 0x01 (Shared) |\n| dSharedWriteBoosterBufferAllocUnits | 最大支援值（依 Step 0.1 讀取結果） |\n| Length | 依實際 Configuration Descriptor 總長度 |\n\n**UFS SPEC Reference**: JESD220H Section 10.7.9 (WRITE DESCRIPTOR), Section 14.1.4 (Configuration Descriptor)\n\n---"
         }
       ],
       "inputs": [],
       "outputs": [
-        "max_lba",
-        "max_alloc_units",
-        "wb_supported"
+        "max_capacity_lun",
+        "wb_support",
+        "config_descriptor_data",
+        "max_alloc_units"
       ]
     },
     {
-      "phase_id": "loop_4",
-      "name": "Burn-in",
+      "phase_id": "loop_1",
+      "name": "Burn-in Loop",
       "type": "loop",
       "loop_type": "condition",
       "loop_count": null,
@@ -284,237 +449,223 @@ authority overrides (conflicts win):
       "steps": [
         {
           "step_id": "step_1_1",
-          "name": "Enable WB",
+          "name": "啟用 Write Booster",
           "scsi_cmd": null,
-          "ufs_query": "SET FLAG (fWriteBoosterEn, IDN 0x0E)",
+          "ufs_query": "SET FLAG (0x02)",
           "opcode": null,
-          "query_opcode": "0x02 (SET FLAG)",
-          "idn": "0x0E (fWriteBoosterEn)",
-          "expected": "`QUERY RESPONSE Success`",
+          "query_opcode": null,
+          "idn": null,
+          "expected": "",
           "fail_condition": null,
           "on_fail": null,
           "produces": [],
-          "consumes": [],
-          "raw_content": "**UFS QUERY**: `SET FLAG (fWriteBoosterEn, IDN 0x0E)`\n\n| Field | Value |\n|-------|-------|\n| Query Opcode | 0x02 (SET FLAG) |\n| IDN | 0x0E (fWriteBoosterEn) |\n| Value | 0x01 |\n\n**Expected**: `QUERY RESPONSE Success`。\n\n---"
+          "consumes": [
+            "max_capacity_lun"
+          ],
+          "raw_content": "**UFS QUERY**: `SET FLAG (0x02)` — fWriteBoosterEn (IDN 0x0E)\n\n**目的**: 設定 fWriteBoosterEn Flag，啟用 Write Booster 功能，使後續寫入操作使用 WB Buffer。\n\n| Field | Value |\n|-------|-------|\n| Opcode (Query) | 0x02 (SET FLAG) |\n| bFlagIDN | 0x0E (fWriteBoosterEn) |\n| LUN | 0x00 |\n\n**UFS SPEC Reference**: JESD220H Section 10.7.8 (SET FLAG), Section 14.2 (Flags)\n\n---"
         },
         {
           "step_id": "step_1_2",
-          "name": "確認 WB 已啟用",
-          "scsi_cmd": null,
-          "ufs_query": "READ FLAG (fWriteBoosterEn)",
-          "opcode": null,
-          "query_opcode": "0x01 (READ FLAG)",
-          "idn": "0x0E",
-          "expected": "`fWriteBoosterEn == 1`",
-          "fail_condition": null,
-          "on_fail": null,
-          "produces": [],
-          "consumes": [],
-          "raw_content": "**UFS QUERY**: `READ FLAG (fWriteBoosterEn)`\n\n| Field | Value |\n|-------|-------|\n| Query Opcode | 0x01 (READ FLAG) |\n| IDN | 0x0E |\n\n**Expected**: `fWriteBoosterEn == 1`。\n\n---"
-        },
-        {
-          "step_id": "step_1_3",
-          "name": "Write Test Data",
+          "name": "隨機寫入（Write Booster 啟用中）",
           "scsi_cmd": "WRITE(10) (2Ah)",
           "ufs_query": null,
           "opcode": "0x2A",
           "query_opcode": null,
           "idn": null,
-          "expected": "`GOOD Status`",
+          "expected": "",
           "fail_condition": null,
           "on_fail": null,
           "produces": [
-            "write_lba",
-            "write_len",
-            "write_data"
+            "write_record_p1"
           ],
           "consumes": [
-            "max_lba"
+            "max_capacity_lun"
           ],
-          "raw_content": "**SCSI CMD**: `WRITE(10) (2Ah)`\n\n| Field | Value |\n|-------|-------|\n| Opcode | 0x2A |\n| LUN | All LUNs |\n| LBA | Random |\n| Transfer Length | Random |\n\n**Expected**: `GOOD Status`。\n\n---"
+          "raw_content": "**SCSI CMD**: `WRITE(10) (2Ah)`\n\n**目的**: 在 Write Booster 啟用狀態下，對隨機 LBA 執行寫入操作，資料經由 WB Buffer。\n\n| Field | Value |\n|-------|-------|\n| Opcode | 0x2A |\n| LUN | 0x00 |\n| LBA | 隨機（依 Test LBA Range） |\n| Transfer Length | 隨機區塊數（依測試設計） |\n| Data | 隨機 Pattern |\n\n**UFS SPEC Reference**: JESD220H Section 12.2.3 (WRITE(10)), SBC-4 Section 5.27\n\n---"
         },
         {
-          "step_id": "step_1_4",
-          "name": "Read Compare",
+          "step_id": "step_1_3",
+          "name": "隨機讀取與資料比對",
           "scsi_cmd": "READ(10) (28h)",
           "ufs_query": null,
           "opcode": "0x28",
           "query_opcode": null,
           "idn": null,
-          "expected": "`GOOD Status`, `Data Match`",
-          "fail_condition": "NOT (`GOOD Status`, `Data Match`)",
-          "on_fail": "abort",
+          "expected": "",
+          "fail_condition": null,
+          "on_fail": null,
           "produces": [],
           "consumes": [
-            "write_lba",
-            "write_len",
-            "write_data"
+            "write_record_p1"
           ],
-          "raw_content": "**SCSI CMD**: `READ(10) (28h)`\n\n| Field | Value |\n|-------|-------|\n| Opcode | 0x28 |\n| LUN | Step 1.3 LUN |\n| LBA | Step 1.3 LBA |\n| Transfer Length | Step 1.3 大小 |\n\n**Expected**: `GOOD Status`, `Data Match`。\n\n---"
+          "raw_content": "**SCSI CMD**: `READ(10) (28h)`\n\n**目的**: 讀回 Step 1.2 寫入的 LBA，比對資料正確性（Data Compare），驗證 WB Buffer 中的資料可正確讀取。\n\n| Field | Value |\n|-------|-------|\n| Opcode | 0x28 |\n| LUN | 0x00 |\n| LBA | 與 Step 1.2 寫入的 LBA 相同 |\n| Transfer Length | 與 Step 1.2 寫入長度相同 |\n\n**UFS SPEC Reference**: JESD220H Section 12.2.2 (READ(10)), SBC-4 Section 5.17\n\n---"
         },
         {
-          "step_id": "step_1_5",
-          "name": "Random Reset",
+          "step_id": "step_1_4",
+          "name": "POR（Power On Reset）",
           "scsi_cmd": null,
           "ufs_query": null,
           "opcode": null,
           "query_opcode": null,
           "idn": null,
-          "expected": "`fDeviceInit == 1`",
+          "expected": "Reset device success",
           "fail_condition": null,
           "on_fail": null,
           "produces": [],
           "consumes": [],
-          "raw_content": "**Reset Types**（隨機）:\n\n| Type | 說明 |\n|:---|:---|\n| SSU | START STOP UNIT Power Cycle |\n| POR | Power-On Reset |\n| LINKSTARTUP | Link re-startup |\n\n**Expected**: `fDeviceInit == 1`。\n\n---"
-        },
-        {
-          "step_id": "step_1_6",
-          "name": "驗證 Reset 後 WB Flag",
-          "scsi_cmd": null,
-          "ufs_query": "READ FLAG (fWriteBoosterEn)",
-          "opcode": null,
-          "query_opcode": null,
-          "idn": null,
-          "expected": "依 SPEC 定義確認 volatile flag 狀態",
-          "fail_condition": null,
-          "on_fail": null,
-          "produces": [],
-          "consumes": [],
-          "raw_content": "**UFS QUERY**: `READ FLAG (fWriteBoosterEn)`\n\n**Expected**: 依 SPEC 定義確認 volatile flag 狀態。\n\n---\n\n### Phase 2: WB Disable + W/R + Reset"
+          "raw_content": "**操作**: `Power On Reset`\n\n**目的**: 對裝置執行 Power On Reset，驗證 WB 啟用狀態下經過 POR 後的穩定性。\n\n| Field | Value |\n|-------|-------|\n| Reset Type | POR (Power On Reset) |\n| 後續 | 等待裝置就緒（fDeviceInit == 0） |\n\n**Expected**: Reset device success\n\n**UFS SPEC Reference**: JESD220H Section 10.7.1.1 (Power On Reset)\n\n---"
         },
         {
           "step_id": "step_2_1",
-          "name": "Write Test Data",
+          "name": "關閉 Write Booster",
+          "scsi_cmd": null,
+          "ufs_query": "CLEAR FLAG (0x05)",
+          "opcode": null,
+          "query_opcode": null,
+          "idn": null,
+          "expected": "",
+          "fail_condition": null,
+          "on_fail": null,
+          "produces": [],
+          "consumes": [
+            "max_capacity_lun"
+          ],
+          "raw_content": "**UFS QUERY**: `CLEAR FLAG (0x05)` — fWriteBoosterEn (IDN 0x0E)\n\n**目的**: 清除 fWriteBoosterEn Flag，退出 Write Booster 模式，使後續寫入不再使用 WB Buffer。\n\n| Field | Value |\n|-------|-------|\n| Opcode (Query) | 0x05 (CLEAR FLAG) |\n| bFlagIDN | 0x0E (fWriteBoosterEn) |\n| LUN | 0x00 |\n\n**UFS SPEC Reference**: JESD220H Section 10.7.8 (CLEAR FLAG), Section 14.2 (Flags)\n\n---"
+        },
+        {
+          "step_id": "step_2_2",
+          "name": "隨機寫入（Write Booster 已退出）",
           "scsi_cmd": "WRITE(10) (2Ah)",
           "ufs_query": null,
           "opcode": "0x2A",
           "query_opcode": null,
           "idn": null,
-          "expected": "`GOOD Status`",
+          "expected": "",
           "fail_condition": null,
           "on_fail": null,
           "produces": [
-            "write_lba",
-            "write_len",
-            "write_data"
+            "write_record_p2"
           ],
           "consumes": [
-            "max_lba"
+            "max_capacity_lun"
           ],
-          "raw_content": "**SCSI CMD**: `WRITE(10) (2Ah)`\n\n| Field | Value |\n|-------|-------|\n| Opcode | 0x2A |\n| FUA | 0 |\n\n**Expected**: `GOOD Status`。\n\n---"
-        },
-        {
-          "step_id": "step_2_2",
-          "name": "Disable WB",
-          "scsi_cmd": null,
-          "ufs_query": "CLEAR FLAG (fWriteBoosterEn)",
-          "opcode": null,
-          "query_opcode": "0x05 (CLEAR FLAG)",
-          "idn": "0x0E",
-          "expected": "`QUERY RESPONSE Success`",
-          "fail_condition": null,
-          "on_fail": null,
-          "produces": [],
-          "consumes": [],
-          "raw_content": "**UFS QUERY**: `CLEAR FLAG (fWriteBoosterEn)`\n\n| Field | Value |\n|-------|-------|\n| Query Opcode | 0x05 (CLEAR FLAG) |\n| IDN | 0x0E |\n\n**Expected**: `QUERY RESPONSE Success`。\n\n---"
+          "raw_content": "**SCSI CMD**: `WRITE(10) (2Ah)`\n\n**目的**: 在 Write Booster 已退出的狀態下，對隨機 LBA 執行寫入操作，資料直接寫入 NAND。\n\n| Field | Value |\n|-------|-------|\n| Opcode | 0x2A |\n| LUN | 0x00 |\n| LBA | 隨機（依 Test LBA Range） |\n| Transfer Length | 隨機區塊數（依測試設計） |\n| Data | 隨機 Pattern |\n\n**UFS SPEC Reference**: JESD220H Section 12.2.3 (WRITE(10)), SBC-4 Section 5.27\n\n---"
         },
         {
           "step_id": "step_2_3",
-          "name": "Read Compare",
+          "name": "隨機讀取與資料比對",
           "scsi_cmd": "READ(10) (28h)",
           "ufs_query": null,
-          "opcode": null,
+          "opcode": "0x28",
           "query_opcode": null,
           "idn": null,
-          "expected": "`GOOD Status`, `Data Match`",
-          "fail_condition": "NOT (`GOOD Status`, `Data Match`)",
-          "on_fail": "abort",
+          "expected": "",
+          "fail_condition": null,
+          "on_fail": null,
           "produces": [],
           "consumes": [
-            "write_lba",
-            "write_len",
-            "write_data"
+            "write_record_p2"
           ],
-          "raw_content": "**SCSI CMD**: `READ(10) (28h)`\n\n**Expected**: `GOOD Status`, `Data Match`。\n\n---"
+          "raw_content": "**SCSI CMD**: `READ(10) (28h)`\n\n**目的**: 讀回 Step 2.2 寫入的 LBA，比對資料正確性（Data Compare），驗證 WB 退出後寫入的資料正確。\n\n| Field | Value |\n|-------|-------|\n| Opcode | 0x28 |\n| LUN | 0x00 |\n| LBA | 與 Step 2.2 寫入的 LBA 相同 |\n| Transfer Length | 與 Step 2.2 寫入長度相同 |\n\n**UFS SPEC Reference**: JESD220H Section 12.2.2 (READ(10)), SBC-4 Section 5.17\n\n---"
         },
         {
           "step_id": "step_2_4",
-          "name": "Random Reset",
+          "name": "POR（Power On Reset）",
           "scsi_cmd": null,
           "ufs_query": null,
           "opcode": null,
           "query_opcode": null,
           "idn": null,
-          "expected": "`fDeviceInit == 1`",
+          "expected": "Reset device success",
           "fail_condition": null,
           "on_fail": null,
           "produces": [],
           "consumes": [],
-          "raw_content": "同 Step 1.5。\n\n**Expected**: `fDeviceInit == 1`。\n\n---"
+          "raw_content": "**操作**: `Power On Reset`\n\n**目的**: 對裝置執行 Power On Reset，驗證 WB 退出後經過 POR 的穩定性。\n\n| Field | Value |\n|-------|-------|\n| Reset Type | POR (Power On Reset) |\n| 後續 | 等待裝置就緒（fDeviceInit == 0） |\n\n**Expected**: Reset device success\n\n**UFS SPEC Reference**: JESD220H Section 10.7.1.1 (Power On Reset)\n\n---"
         },
         {
-          "step_id": "step_2_5",
-          "name": "驗證 WB Disabled",
+          "step_id": "step_3_1",
+          "name": "設定 Flush Flag（隨機選擇）",
           "scsi_cmd": null,
-          "ufs_query": "READ FLAG (fWriteBoosterEn)",
+          "ufs_query": "SET FLAG (0x02)",
           "opcode": null,
           "query_opcode": null,
-          "idn": "Name",
-          "expected": "`fWriteBoosterEn == 0`",
+          "idn": null,
+          "expected": "",
+          "fail_condition": null,
+          "on_fail": null,
+          "produces": [],
+          "consumes": [
+            "max_capacity_lun"
+          ],
+          "raw_content": "**UFS QUERY**: `SET FLAG (0x02)` — 分支選擇\n\n**目的**: 依 50%/50% 機率隨機選擇設定 fWriteBoosterBufferFlushEn 或 fWriteBoosterBufferFlushDuringHibernate，為後續 Reset 場景建立前置條件。\n\n| Field | Value |\n|-------|-------|\n| Opcode (Query) | 0x02 (SET FLAG) |\n| bFlagIDN | **Branch 1 (50%)**: 0x0F (fWriteBoosterBufferFlushEn) |\n| | **Branch 2 (50%)**: 0x10 (fWriteBoosterBufferFlushDuringHibernate) |\n| LUN | 0x00 |\n\n**Branch Logic** (per JIRA weighted random):\n- 50%: SET FLAG fWriteBoosterBufferFlushEn (0x0F) — Enable WB buffer flush\n- 50%: SET FLAG fWriteBoosterBufferFlushDuringHibernate (0x10) — Enable flush during Hibernate\n\n**UFS SPEC Reference**: JESD220H Section 10.7.8 (SET FLAG), Section 14.2 (Flags)\n\n---"
+        },
+        {
+          "step_id": "step_3_2",
+          "name": "隨機延遲",
+          "scsi_cmd": null,
+          "ufs_query": null,
+          "opcode": null,
+          "query_opcode": null,
+          "idn": null,
+          "expected": "",
           "fail_condition": null,
           "on_fail": null,
           "produces": [],
           "consumes": [],
-          "raw_content": "**UFS QUERY**: `READ FLAG (fWriteBoosterEn)`\n\n**Expected**: `fWriteBoosterEn == 0`。\n\n---\n\n### Phase 3: Flush Enable + Reset\n\n#### Step 3.1/3.2: [Branch 50%/50%] Set Flush Flag\n\n**UFS QUERY**: `SET FLAG`\n\n| Branch | IDN | Name |\n|:---|:---|:---|\n| 50% | 0x0B | fWriteBoosterBufferFlushEn |\n| 50% | 0x0C | fWriteBoosterBufferFlushDuringHibernate |\n\n**Expected**: `QUERY RESPONSE Success`。\n\n---"
+          "raw_content": "**操作**: `Delay`\n\n**目的**: 等待一段隨機延遲時間（0~2 秒），模擬實際使用場景中的非同步事件間隔，觸發 WB Buffer Flush 行為。\n\n| Field | Value |\n|-------|-------|\n| Delay Range | 0 ~ 2 秒（均勻隨機） |\n\n**UFS SPEC Reference**: N/A（純延遲操作，無 SPEC 參照）\n\n---"
         },
         {
           "step_id": "step_3_3",
-          "name": "Random Delay",
+          "name": "POR（Power On Reset）",
           "scsi_cmd": null,
           "ufs_query": null,
           "opcode": null,
           "query_opcode": null,
           "idn": null,
-          "expected": "Delay 完成",
+          "expected": "Reset device success",
           "fail_condition": null,
           "on_fail": null,
           "produces": [],
           "consumes": [],
-          "raw_content": "**目的**: 延遲 0~2 秒，等待 Flush 觸發。\n\n**Expected**: Delay 完成。\n\n---"
+          "raw_content": "**操作**: `Power On Reset`\n\n**目的**: 在 Flush Flag 設定後執行 POR，驗證 WB Buffer Flush 機制在 POR 下的行為。\n\n| Field | Value |\n|-------|-------|\n| Reset Type | POR (Power On Reset) |\n| 後續 | 等待裝置就緒（fDeviceInit == 0） |\n\n**Expected**: Reset device success\n\n**UFS SPEC Reference**: JESD220H Section 10.7.1.1 (Power On Reset)\n\n---"
         },
         {
           "step_id": "step_3_4",
-          "name": "Random Reset",
+          "name": "START STOP UNIT — 進入 Sleep 模式",
+          "scsi_cmd": "START STOP UNIT (1Bh)",
+          "ufs_query": null,
+          "opcode": "0x1B",
+          "query_opcode": null,
+          "idn": null,
+          "expected": "",
+          "fail_condition": null,
+          "on_fail": null,
+          "produces": [],
+          "consumes": [
+            "max_capacity_lun"
+          ],
+          "raw_content": "**SCSI CMD**: `START STOP UNIT (1Bh)`\n\n**目的**: 將裝置轉入 Sleep 低功耗模式，模擬 Hibernate/SSU 場景後再進行 POR。\n\n| Field | Value |\n|-------|-------|\n| Opcode | 0x1B |\n| START | 0 (Stop) |\n| Power Condition | 0x02 (Sleep) |\n| IMMED | 0x00 |\n\n**UFS SPEC Reference**: JESD220H Section 12.2.8 (START STOP UNIT), SBC-4 Section 5.22\n\n---"
+        },
+        {
+          "step_id": "step_3_5",
+          "name": "POR（Power On Reset）",
           "scsi_cmd": null,
           "ufs_query": null,
           "opcode": null,
           "query_opcode": null,
           "idn": null,
-          "expected": "`fDeviceInit == 1`",
+          "expected": "Reset device success",
           "fail_condition": null,
           "on_fail": null,
           "produces": [],
           "consumes": [],
-          "raw_content": "**Reset Types**（隨機）:\n\n| Type | 說明 |\n|:---|:---|\n| POR_delay | POR with delay |\n| SSU+Hibernate+POR | SSU → Hibernate → POR |\n\n**Expected**: `fDeviceInit == 1`。\n\n---"
-        },
-        {
-          "step_id": "step_3_5",
-          "name": "驗證 Flush Flag",
-          "scsi_cmd": null,
-          "ufs_query": "READ FLAG (依 Step 3.1/3.2 選擇的 flag)",
-          "opcode": null,
-          "query_opcode": null,
-          "idn": null,
-          "expected": "確認 reset 後 flush flag 狀態符合 SPEC",
-          "fail_condition": null,
-          "on_fail": null,
-          "produces": [],
-          "consumes": [],
-          "raw_content": "**UFS QUERY**: `READ FLAG (依 Step 3.1/3.2 選擇的 flag)`\n\n**Expected**: 確認 reset 後 flush flag 狀態符合 SPEC。\n\n---"
+          "raw_content": "**操作**: `Power On Reset`\n\n**目的**: 從 Sleep 狀態執行 POR，驗證 WB Buffer Flush 在 Sleep → POR 路徑下的穩定性。\n\n| Field | Value |\n|-------|-------|\n| Reset Type | POR (Power On Reset) |\n| 後續 | 等待裝置就緒（fDeviceInit == 0） |\n\n**Expected**: Reset device success\n\n**UFS SPEC Reference**: JESD220H Section 10.7.1.1 (Power On Reset)\n\n---"
         }
       ],
       "inputs": [
-        "max_lba"
+        "max_capacity_lun",
+        "max_alloc_units"
       ],
       "outputs": []
     }
@@ -522,15 +673,16 @@ authority overrides (conflicts win):
   "dependency_graph": {
     "nodes": [
       "phase_0",
-      "loop_4"
+      "loop_1"
     ],
     "edges": [
       {
         "from": "phase_0",
-        "to": "loop_4",
+        "to": "loop_1",
         "type": "sequential",
         "data_flow": [
-          "max_lba"
+          "max_capacity_lun",
+          "max_alloc_units"
         ]
       }
     ]

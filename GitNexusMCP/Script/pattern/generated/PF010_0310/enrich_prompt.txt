@@ -29,7 +29,7 @@ Rules:
   "edges": [{"from": "...", "to": "...", "type": "sequential", "data_flow": [...]}]
 }
 
-Pattern: PF010_0310 — PF010_0310_WriteBooster_SSU_Rst-Normalized-TestFlow
+Pattern: PF010_0310 — PF010_0310_Write-Booster-SSU-Rst-Normalized-TestFlow
 
 ## Conflict-Resolved Overrides (CustomerReq>Spec, UserPrompt>ModelDefault)
 ---
@@ -65,21 +65,13 @@ The UFS 4.1 Specification places no restriction on which LUNs may receive WriteB
 
 ## Phase Skeleton
 
-### phase_0: WB 初始化配置 (type=sequential)
-  - step_0_1: 確認裝置就緒 [TEST UNIT READY (00h)]
-    expected: `GOOD Status`
-  - step_0_2: 取得 LUN 容量 [READ CAPACITY(10) (25h)]
-    expected: `GOOD Status`，取得 MAX_LBA
-  - step_0_3: 檢查 WB 支援 [READ ATTRIBUTE (dExtendedUFSFeaturesSupport)]
-    expected: `QUERY RESPONSE Success`，確認 WB bit 已 set
-  - step_0_4: 讀取最大 WB Buffer [READ ATTRIBUTE (dLUNumWriteBoosterBufferAllocUnits, IDN 0x17)]
-    expected: `QUERY RESPONSE Success`，回傳 max alloc units
-  - step_0_5: 讀取 Configuration Descriptor [READ DESCRIPTOR (Configuration Descriptor)]
-    expected: `QUERY RESPONSE Success`
-  - step_0_6: 配置 WB Buffer（Shared Type + MAX） [WRITE DESCRIPTOR (Configuration Descriptor)]
-    expected: `QUERY RESPONSE Success`
+### phase_0: Pre-condition: Write Booster Buffer Configuration (type=sequential)
+  - step_0_1: 檢查 Write Booster 支援能力 [READ DESCRIPTOR (0x07)]
+    expected: 
+  - step_0_2: 設定 Write Booster Buffer 為 Shared 類型（最大配置） [WRITE DESCRIPTOR (0x08)]
+    expected: 
 
-  ## Relevant Wiki (12 ingested pages)
+  ## Relevant Wiki (5 ingested pages)
   ### FFU — Field Firmware Update
 
 # FFU — Field Firmware Update
@@ -103,62 +95,74 @@ All other WRITE BUFFER modes (00h, 03h–0Dh, 0Fh, etc.) are not used for FFU.
 CDB format (opcode 3Bh):
 
 
-  ### PSA — Production State Awareness
+  ### Thin Provisioning and UNMAP
 
-# PSA — Production State Awareness
+# Thin Provisioning and UNMAP
 
-## Introduction (Spec 13.6.1)
+Thin Provisioning is a UFS LU-level configuration that allows the host to de-allocate logical blocks, notifying the device that certain LBA ranges are no longer in use. This enables the device to reclaim physical NAND resources associated with those addresses.
 
-UFS devices can utilize knowledge about their production status and adjust internal operations accordingly. Content loaded into the storage device prior to device soldering might be corrupted at a higher probability than in regular mode. The UFS device uses "special" internal operations for loading content prior to device soldering which reduces production failures, and switches to "regular" operations post-soldering.
+## `bProvisioningType` — LU Provisioning Mode
 
-The sensitivity to device soldering is a property of the individual logical unit. Some logical units may be sensitive to device soldering while others may not. Before loading data, the host reads `bPSASensitive` to identify which LUs are sensitive.
+Configured per-LU in the Unit Descriptor (IDN 02h):
 
-Pre-loaded data is data written to the device **after** dev
-  ### Exception Events
+| Value | Mode | UNMAP Support | Unmapped LBA Read Behavior |
+|-------|------|--------------|--------------------------|
+| 00h | Full provisioning | Not supported | Returns data (implementation-defined) |
+| 02h | Thin provisioning, TPRZ=0 | Supported | Returns any data (not guaranteed to be zeros) |
+| 03h | Thin provisioning, TPRZ=1 | Supported | Returns zeros (secure erase semantics) |
 
-# Exception Events
+`bProvisioningT
+  ### Device Descriptor (IDN 00h)
 
-Exception Events are an asynchronous notification mechanism allowing the device to alert the host to conditions requiring attention. The device signals an event by setting `EVENT_ALERT` in the RESPONSE UPIU Device Information field; the host then reads `wExceptionEventStatus` to determine which event(s) are active.
+# Device Descriptor (IDN 00h)
 
-## Signal Path
+The Device Descriptor is the top-level descriptor of a UFS device. It identifies the manufacturer, product, spec version, LU count, and device capabilities. It is read-only and accessed via QUERY REQUEST with OPCODE=01h (READ DESCRIPTOR).
 
-1. **Device detects condition** → sets corresponding bit in `wExceptionEventStatus` (IDN 0Eh)
-2. **Device sets `EVENT_ALERT`** → `bit[0]` of Device Information field in the next RESPONSE UPIU
-3. **Host reads `EVENT_ALERT = 1`** → issues QUERY REQUEST to read `wExceptionEventStatus`
-4. **Device clears the bit** in `wExceptionEventStatus` when the status is read by the host
-5. **Host takes action** based on which bits are set
+- **IDN**: 00h
+- **bLength**: 59h (89 bytes for UFS 4.1)
+- **Access**: Read only (OPCODE=01h); host queries INDEX=00h, SELECTOR=00h
 
-## Control Attri
+## Field Table
 
-### loop_4: Burn-in (type=loop)
-  - step_1_1: Enable WB [SET FLAG (fWriteBoosterEn, IDN 0x0E)]
-    expected: `QUERY RESPONSE Success`
-  - step_1_2: 確認 WB 已啟用 [READ FLAG (fWriteBoosterEn)]
-    expected: `fWriteBoosterEn == 1`
-  - step_1_3: Write Test Data [WRITE(10) (2Ah)]
-    expected: `GOOD Status`
-  - step_1_4: Read Compare [READ(10) (28h)]
-    expected: `GOOD Status`, `Data Match`
-  - step_1_5: Random Reset [—]
-    expected: `fDeviceInit == 1`
-  - step_1_6: 驗證 Reset 後 WB Flag [READ FLAG (fWriteBoosterEn)]
-    expected: 依 SPEC 定義確認 volatile flag 狀態
-  - step_2_1: Write Test Data [WRITE(10) (2Ah)]
-    expected: `GOOD Status`
-  - step_2_2: Disable WB [CLEAR FLAG (fWriteBoosterEn)]
-    expected: `QUERY RESPONSE Success`
-  - step_2_3: Read Compare [READ(10) (28h)]
-    expected: `GOOD Status`, `Data Match`
-  - step_2_4: Random Reset [—]
-    expected: `fDeviceInit == 1`
-  - step_2_5: 驗證 WB Disabled [READ FLAG (fWriteBoosterEn)]
-    expected: `fWriteBoosterEn == 0`
-  - step_3_3: Random Delay [—]
-    expected: Delay 完成
-  - step_3_4: Random Reset [—]
-    expected: `fDeviceInit == 1`
-  - step_3_5: 驗證 Flush Flag [READ FLAG (依 Step 3.1/3.2 選擇的 flag)]
-    expected: 確認 reset 後 flush flag 狀態符合 SPEC
+| Offset | Field | Value / Notes |
+|--------|-------|---------------|
+| 00h | bLength | 59h |
+| 01h | bDescriptorIDN | 00h |
+| 02h | bDevice | Device class |
+| 03h | bDeviceClass | |
+| 04h | bDeviceSubClass | |
+| 05h | bProtocol | |
+| 06h | bNumberLU | Number of enabled LUs |
+| 07h | bNumberWLU | Number of Well-Known LUs |
+| 08h | bBootEnable | 00h=disabled, 01h=bootable, 02h=
+
+### loop_1: Burn-in Loop (type=loop)
+  - step_1_1: 啟用 Write Booster [SET FLAG (0x02)]
+    expected: 
+  - step_1_2: 隨機寫入（Write Booster 啟用中） [WRITE(10) (2Ah)]
+    expected: 
+  - step_1_3: 隨機讀取與資料比對 [READ(10) (28h)]
+    expected: 
+  - step_1_4: POR（Power On Reset） [—]
+    expected: Reset device success
+  - step_2_1: 關閉 Write Booster [CLEAR FLAG (0x05)]
+    expected: 
+  - step_2_2: 隨機寫入（Write Booster 已退出） [WRITE(10) (2Ah)]
+    expected: 
+  - step_2_3: 隨機讀取與資料比對 [READ(10) (28h)]
+    expected: 
+  - step_2_4: POR（Power On Reset） [—]
+    expected: Reset device success
+  - step_3_1: 設定 Flush Flag（隨機選擇） [SET FLAG (0x02)]
+    expected: 
+  - step_3_2: 隨機延遲 [—]
+    expected: 
+  - step_3_3: POR（Power On Reset） [—]
+    expected: Reset device success
+  - step_3_4: START STOP UNIT — 進入 Sleep 模式 [START STOP UNIT (1Bh)]
+    expected: 
+  - step_3_5: POR（Power On Reset） [—]
+    expected: Reset device success
 
   ## Relevant Wiki (12 ingested pages)
   ### Refresh Operation
@@ -203,14 +207,20 @@ All other WRITE BUFFER modes (00h, 03h–0Dh, 0Fh, etc.) are not used for FFU.
 CDB format (opcode 3Bh):
 
 
-  ### PSA — Production State Awareness
+  ### Thin Provisioning and UNMAP
 
-# PSA — Production State Awareness
+# Thin Provisioning and UNMAP
 
-## Introduction (Spec 13.6.1)
+Thin Provisioning is a UFS LU-level configuration that allows the host to de-allocate logical blocks, notifying the device that certain LBA ranges are no longer in use. This enables the device to reclaim physical NAND resources associated with those addresses.
 
-UFS devices can utilize knowledge about their production status and adjust internal operations accordingly. Content loaded into the storage device prior to device soldering might be corrupted at a higher probability than in regular mode. The UFS device uses "special" internal operations for loading content prior to device soldering which reduces production failures, and switches to "regular" operations post-soldering.
+## `bProvisioningType` — LU Provisioning Mode
 
-The sensitivity to device soldering is a property of the individual logical unit. Some logical units may be sensitive to device soldering while others may not. Before loading data, the host reads `bPSASensitive` to identify which LUs are sensitive.
+Configured per-LU in the Unit Descriptor (IDN 02h):
 
-Pre-loaded data is data written to the device **after** dev
+| Value | Mode | UNMAP Support | Unmapped LBA Read Behavior |
+|-------|------|--------------|--------------------------|
+| 00h | Full provisioning | Not supported | Returns data (implementation-defined) |
+| 02h | Thin provisioning, TPRZ=0 | Supported | Returns any data (not guaranteed to be zeros) |
+| 03h | Thin provisioning, TPRZ=1 | Supported | Returns zeros (secure erase semantics) |
+
+`bProvisioningT

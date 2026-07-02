@@ -5,32 +5,41 @@
     "kind": "step",
     "unit_id": "step_0_1",
     "phase_id": "phase_0",
-    "phase_name": "WB 初始化配置",
+    "phase_name": "Pre-condition: Write Booster Buffer Configuration",
     "phase_type": "sequential",
     "loop_type": null,
     "loop_count": null,
     "steps": [
       {
         "step_id": "step_0_1",
-        "name": "確認裝置就緒",
-        "scsi_cmd": "TEST UNIT READY (00h)",
-        "ufs_query": null,
-        "opcode": "0x00",
+        "name": "檢查 Write Booster 支援能力",
+        "scsi_cmd": null,
+        "ufs_query": "READ DESCRIPTOR (0x07)",
+        "opcode": null,
         "query_opcode": null,
-        "idn": null,
-        "expected": "`GOOD Status`",
+        "idn": "0x00 (Device Descriptor)",
+        "expected": "",
         "fail_condition": null,
         "on_fail": null,
-        "produces": [],
+        "produces": [
+          "max_capacity_lun",
+          "wb_support"
+        ],
         "consumes": [],
-        "raw_content": "**SCSI CMD**: `TEST UNIT READY (00h)`\n\n| Field | Value |\n|-------|-------|\n| Opcode | 0x00 |\n\n**Expected**: `GOOD Status`。\n\n---"
+        "raw_content": "**UFS QUERY**: `READ DESCRIPTOR (0x07)` — Device Descriptor (IDN 0x00)\n\n**目的**: 讀取 Device Descriptor，確認裝置是否支援 Write Booster 功能，並取得最大 Buffer 配置能力資訊。\n\n| Field | Value |\n|-------|-------|\n| Opcode (Query) | 0x07 (READ DESCRIPTOR) |\n| IDN | 0x00 (Device Descriptor) |\n| Selector | 0x00 |\n| Index | 0x00 |\n| Length | Descriptor 實際長度（依 bLength 而定） |\n\n**UFS SPEC Reference**: JESD220H Section 10.7.9 (READ DESCRIPTOR), Section 14.1.1 (Device Descriptor)\n\n---"
       }
     ],
-    "produces": [],
+    "produces": [
+      "max_capacity_lun",
+      "wb_support"
+    ],
     "consumes": [],
     "helper_methods": [],
     "loop_idx_param": false,
-    "set_vars": [],
+    "set_vars": [
+      "max_capacity_lun",
+      "wb_support"
+    ],
     "available_vars": []
   },
   {
@@ -39,656 +48,392 @@
     "kind": "step",
     "unit_id": "step_0_2",
     "phase_id": "phase_0",
-    "phase_name": "WB 初始化配置",
+    "phase_name": "Pre-condition: Write Booster Buffer Configuration",
     "phase_type": "sequential",
     "loop_type": null,
     "loop_count": null,
     "steps": [
       {
         "step_id": "step_0_2",
-        "name": "取得 LUN 容量",
-        "scsi_cmd": "READ CAPACITY(10) (25h)",
-        "ufs_query": null,
-        "opcode": "0x25",
+        "name": "設定 Write Booster Buffer 為 Shared 類型（最大配置）",
+        "scsi_cmd": null,
+        "ufs_query": "WRITE DESCRIPTOR (0x08)",
+        "opcode": null,
         "query_opcode": null,
-        "idn": null,
-        "expected": "`GOOD Status`，取得 MAX_LBA",
+        "idn": "0x01 (Configuration Descriptor)",
+        "expected": "",
         "fail_condition": null,
         "on_fail": null,
         "produces": [
-          "max_lba"
+          "config_descriptor_data",
+          "max_alloc_units"
         ],
-        "consumes": [],
-        "raw_content": "**SCSI CMD**: `READ CAPACITY(10) (25h)`\n\n| Field | Value |\n|-------|-------|\n| Opcode | 0x25 |\n| LUN | All LUNs |\n\n**Expected**: `GOOD Status`，取得 MAX_LBA。\n\n---"
+        "consumes": [
+          "max_capacity_lun",
+          "wb_support"
+        ],
+        "raw_content": "**UFS QUERY**: `WRITE DESCRIPTOR (0x08)` — Configuration Descriptor (IDN 0x01)\n\n**目的**: 將 Write Booster Buffer 設定為 Shared 類型（所有 LU 共享），並配置最大支援的 Buffer Allocation Units 數量。\n\n| Field | Value |\n|-------|-------|\n| Opcode (Query) | 0x08 (WRITE DESCRIPTOR) |\n| IDN | 0x01 (Configuration Descriptor) |\n| Selector | 0x00 |\n| Index | 0x00 |\n| bWriteBoosterBufferType | 0x01 (Shared) |\n| dSharedWriteBoosterBufferAllocUnits | 最大支援值（依 Step 0.1 讀取結果） |\n| Length | 依實際 Configuration Descriptor 總長度 |\n\n**UFS SPEC Reference**: JESD220H Section 10.7.9 (WRITE DESCRIPTOR), Section 14.1.4 (Configuration Descriptor)\n\n---"
       }
     ],
     "produces": [
-      "max_lba"
+      "config_descriptor_data",
+      "max_alloc_units"
     ],
-    "consumes": [],
+    "consumes": [
+      "max_capacity_lun",
+      "wb_support"
+    ],
     "helper_methods": [],
     "loop_idx_param": false,
     "set_vars": [
-      "max_lba"
+      "config_descriptor_data",
+      "max_alloc_units"
     ],
-    "available_vars": []
+    "available_vars": [
+      "max_capacity_lun",
+      "wb_support"
+    ]
   },
   {
     "index": 3,
-    "method": "step3",
-    "kind": "step",
-    "unit_id": "step_0_3",
-    "phase_id": "phase_0",
-    "phase_name": "WB 初始化配置",
-    "phase_type": "sequential",
-    "loop_type": null,
+    "method": "_loop1_step_1_1",
+    "kind": "loop_substep",
+    "unit_id": "step_1_1",
+    "phase_id": "loop_1",
+    "phase_name": "Burn-in Loop",
+    "phase_type": "loop",
+    "loop_type": "condition",
     "loop_count": null,
     "steps": [
       {
-        "step_id": "step_0_3",
-        "name": "檢查 WB 支援",
+        "step_id": "step_1_1",
+        "name": "啟用 Write Booster",
         "scsi_cmd": null,
-        "ufs_query": "READ ATTRIBUTE (dExtendedUFSFeaturesSupport)",
+        "ufs_query": "SET FLAG (0x02)",
         "opcode": null,
-        "query_opcode": "0x03 (READ ATTRIBUTE)",
-        "idn": "dExtendedUFSFeaturesSupport",
-        "expected": "`QUERY RESPONSE Success`，確認 WB bit 已 set",
+        "query_opcode": null,
+        "idn": null,
+        "expected": "",
         "fail_condition": null,
         "on_fail": null,
-        "produces": [
-          "wb_supported"
+        "produces": [],
+        "consumes": [
+          "max_capacity_lun"
         ],
-        "consumes": [],
-        "raw_content": "**UFS QUERY**: `READ ATTRIBUTE (dExtendedUFSFeaturesSupport)`\n\n| Field | Value |\n|-------|-------|\n| Query Opcode | 0x03 (READ ATTRIBUTE) |\n| IDN | dExtendedUFSFeaturesSupport |\n\n**Expected**: `QUERY RESPONSE Success`，確認 WB bit 已 set。\n\n---"
+        "raw_content": "**UFS QUERY**: `SET FLAG (0x02)` — fWriteBoosterEn (IDN 0x0E)\n\n**目的**: 設定 fWriteBoosterEn Flag，啟用 Write Booster 功能，使後續寫入操作使用 WB Buffer。\n\n| Field | Value |\n|-------|-------|\n| Opcode (Query) | 0x02 (SET FLAG) |\n| bFlagIDN | 0x0E (fWriteBoosterEn) |\n| LUN | 0x00 |\n\n**UFS SPEC Reference**: JESD220H Section 10.7.8 (SET FLAG), Section 14.2 (Flags)\n\n---"
       }
     ],
-    "produces": [
-      "wb_supported"
+    "produces": [],
+    "consumes": [
+      "max_capacity_lun"
     ],
-    "consumes": [],
     "helper_methods": [],
-    "loop_idx_param": false,
-    "set_vars": [
-      "wb_supported"
-    ],
+    "loop_idx_param": true,
+    "set_vars": [],
     "available_vars": [
-      "max_lba"
+      "max_capacity_lun",
+      "wb_support",
+      "config_descriptor_data",
+      "max_alloc_units"
     ]
   },
   {
     "index": 4,
-    "method": "step4",
-    "kind": "step",
-    "unit_id": "step_0_4",
-    "phase_id": "phase_0",
-    "phase_name": "WB 初始化配置",
-    "phase_type": "sequential",
-    "loop_type": null,
+    "method": "_loop1_step_1_2",
+    "kind": "loop_substep",
+    "unit_id": "step_1_2",
+    "phase_id": "loop_1",
+    "phase_name": "Burn-in Loop",
+    "phase_type": "loop",
+    "loop_type": "condition",
     "loop_count": null,
     "steps": [
       {
-        "step_id": "step_0_4",
-        "name": "讀取最大 WB Buffer",
-        "scsi_cmd": null,
-        "ufs_query": "READ ATTRIBUTE (dLUNumWriteBoosterBufferAllocUnits, IDN 0x17)",
-        "opcode": null,
-        "query_opcode": "0x03 (READ ATTRIBUTE)",
-        "idn": "0x17 (dLUNumWriteBoosterBufferAllocUnits — R/O)",
-        "expected": "`QUERY RESPONSE Success`，回傳 max alloc units",
+        "step_id": "step_1_2",
+        "name": "隨機寫入（Write Booster 啟用中）",
+        "scsi_cmd": "WRITE(10) (2Ah)",
+        "ufs_query": null,
+        "opcode": "0x2A",
+        "query_opcode": null,
+        "idn": null,
+        "expected": "",
         "fail_condition": null,
         "on_fail": null,
         "produces": [
-          "max_alloc_units"
+          "write_record_p1"
         ],
-        "consumes": [],
-        "raw_content": "**UFS QUERY**: `READ ATTRIBUTE (dLUNumWriteBoosterBufferAllocUnits, IDN 0x17)`\n\n| Field | Value |\n|-------|-------|\n| Query Opcode | 0x03 (READ ATTRIBUTE) |\n| IDN | 0x17 (dLUNumWriteBoosterBufferAllocUnits — R/O) |\n\n**Expected**: `QUERY RESPONSE Success`，回傳 max alloc units。\n\n**UFS SPEC Reference**: JESD220H Section 14.3.1 (dLUNumWriteBoosterBufferAllocUnits 為 Read-Only)\n\n---"
+        "consumes": [
+          "max_capacity_lun"
+        ],
+        "raw_content": "**SCSI CMD**: `WRITE(10) (2Ah)`\n\n**目的**: 在 Write Booster 啟用狀態下，對隨機 LBA 執行寫入操作，資料經由 WB Buffer。\n\n| Field | Value |\n|-------|-------|\n| Opcode | 0x2A |\n| LUN | 0x00 |\n| LBA | 隨機（依 Test LBA Range） |\n| Transfer Length | 隨機區塊數（依測試設計） |\n| Data | 隨機 Pattern |\n\n**UFS SPEC Reference**: JESD220H Section 12.2.3 (WRITE(10)), SBC-4 Section 5.27\n\n---"
       }
     ],
     "produces": [
-      "max_alloc_units"
+      "write_record_p1"
     ],
-    "consumes": [],
+    "consumes": [
+      "max_capacity_lun"
+    ],
     "helper_methods": [],
-    "loop_idx_param": false,
+    "loop_idx_param": true,
     "set_vars": [
-      "max_alloc_units"
+      "write_record_p1"
     ],
     "available_vars": [
-      "max_lba",
-      "wb_supported"
+      "max_capacity_lun",
+      "wb_support",
+      "config_descriptor_data",
+      "max_alloc_units"
     ]
   },
   {
     "index": 5,
-    "method": "step5",
-    "kind": "step",
-    "unit_id": "step_0_5",
-    "phase_id": "phase_0",
-    "phase_name": "WB 初始化配置",
-    "phase_type": "sequential",
-    "loop_type": null,
+    "method": "_loop1_step_1_3",
+    "kind": "loop_substep",
+    "unit_id": "step_1_3",
+    "phase_id": "loop_1",
+    "phase_name": "Burn-in Loop",
+    "phase_type": "loop",
+    "loop_type": "condition",
     "loop_count": null,
     "steps": [
       {
-        "step_id": "step_0_5",
-        "name": "讀取 Configuration Descriptor",
-        "scsi_cmd": null,
-        "ufs_query": "READ DESCRIPTOR (Configuration Descriptor)",
-        "opcode": null,
-        "query_opcode": "0x07 (READ DESCRIPTOR)",
-        "idn": "0x01 (Configuration Descriptor)",
-        "expected": "`QUERY RESPONSE Success`",
+        "step_id": "step_1_3",
+        "name": "隨機讀取與資料比對",
+        "scsi_cmd": "READ(10) (28h)",
+        "ufs_query": null,
+        "opcode": "0x28",
+        "query_opcode": null,
+        "idn": null,
+        "expected": "",
         "fail_condition": null,
         "on_fail": null,
-        "produces": [
-          "config_descriptor_data"
+        "produces": [],
+        "consumes": [
+          "write_record_p1"
         ],
-        "consumes": [],
-        "raw_content": "**UFS QUERY**: `READ DESCRIPTOR (Configuration Descriptor)`\n\n| Field | Value |\n|-------|-------|\n| Query Opcode | 0x07 (READ DESCRIPTOR) |\n| IDN | 0x01 (Configuration Descriptor) |\n| Index | 0x00 |\n| Selector | 0x00 |\n| Length | 0x40 |\n\n**Expected**: `QUERY RESPONSE Success`。\n\n---"
+        "raw_content": "**SCSI CMD**: `READ(10) (28h)`\n\n**目的**: 讀回 Step 1.2 寫入的 LBA，比對資料正確性（Data Compare），驗證 WB Buffer 中的資料可正確讀取。\n\n| Field | Value |\n|-------|-------|\n| Opcode | 0x28 |\n| LUN | 0x00 |\n| LBA | 與 Step 1.2 寫入的 LBA 相同 |\n| Transfer Length | 與 Step 1.2 寫入長度相同 |\n\n**UFS SPEC Reference**: JESD220H Section 12.2.2 (READ(10)), SBC-4 Section 5.17\n\n---"
       }
     ],
-    "produces": [
-      "config_descriptor_data"
+    "produces": [],
+    "consumes": [
+      "write_record_p1"
     ],
-    "consumes": [],
     "helper_methods": [],
-    "loop_idx_param": false,
-    "set_vars": [
-      "config_descriptor_data"
-    ],
+    "loop_idx_param": true,
+    "set_vars": [],
     "available_vars": [
-      "max_lba",
-      "wb_supported",
-      "max_alloc_units"
+      "max_capacity_lun",
+      "wb_support",
+      "config_descriptor_data",
+      "max_alloc_units",
+      "write_record_p1"
     ]
   },
   {
     "index": 6,
-    "method": "step6",
-    "kind": "step",
-    "unit_id": "step_0_6",
-    "phase_id": "phase_0",
-    "phase_name": "WB 初始化配置",
-    "phase_type": "sequential",
-    "loop_type": null,
+    "method": "_loop1_step_1_4",
+    "kind": "loop_substep",
+    "unit_id": "step_1_4",
+    "phase_id": "loop_1",
+    "phase_name": "Burn-in Loop",
+    "phase_type": "loop",
+    "loop_type": "condition",
     "loop_count": null,
     "steps": [
       {
-        "step_id": "step_0_6",
-        "name": "配置 WB Buffer（Shared Type + MAX）",
+        "step_id": "step_1_4",
+        "name": "POR（Power On Reset）",
         "scsi_cmd": null,
-        "ufs_query": "WRITE DESCRIPTOR (Configuration Descriptor)",
+        "ufs_query": null,
         "opcode": null,
-        "query_opcode": "0x08 (WRITE DESCRIPTOR)",
-        "idn": "0x01 (Configuration Descriptor)",
-        "expected": "`QUERY RESPONSE Success`",
+        "query_opcode": null,
+        "idn": null,
+        "expected": "Reset device success",
         "fail_condition": null,
         "on_fail": null,
         "produces": [],
-        "consumes": [
-          "max_alloc_units",
-          "config_descriptor_data"
-        ],
-        "raw_content": "**UFS QUERY**: `WRITE DESCRIPTOR (Configuration Descriptor)`\n\n**重要**: dLUNumWriteBoosterBufferAllocUnits 為唯讀 Attribute，必須透過 WRITE DESCRIPTOR (Configuration Descriptor) 設定。\n\n| Field | Value |\n|-------|-------|\n| Query Opcode | 0x08 (WRITE DESCRIPTOR) |\n| IDN | 0x01 (Configuration Descriptor) |\n| bWriteBoosterBufferType | 0x01 (Shared) |\n| dLUNumWriteBoosterBufferAllocUnits | MAX (from Step 0.4) |\n\n**Expected**: `QUERY RESPONSE Success`。\n\n---"
+        "consumes": [],
+        "raw_content": "**操作**: `Power On Reset`\n\n**目的**: 對裝置執行 Power On Reset，驗證 WB 啟用狀態下經過 POR 後的穩定性。\n\n| Field | Value |\n|-------|-------|\n| Reset Type | POR (Power On Reset) |\n| 後續 | 等待裝置就緒（fDeviceInit == 0） |\n\n**Expected**: Reset device success\n\n**UFS SPEC Reference**: JESD220H Section 10.7.1.1 (Power On Reset)\n\n---"
       }
     ],
     "produces": [],
-    "consumes": [
-      "max_alloc_units",
-      "config_descriptor_data"
-    ],
+    "consumes": [],
     "helper_methods": [],
-    "loop_idx_param": false,
+    "loop_idx_param": true,
     "set_vars": [],
     "available_vars": [
-      "max_lba",
-      "wb_supported",
+      "max_capacity_lun",
+      "wb_support",
+      "config_descriptor_data",
       "max_alloc_units",
-      "config_descriptor_data"
+      "write_record_p1"
     ]
   },
   {
     "index": 7,
-    "method": "_loop4_step_1_1",
+    "method": "_loop1_step_2_1",
     "kind": "loop_substep",
-    "unit_id": "step_1_1",
-    "phase_id": "loop_4",
-    "phase_name": "Burn-in",
+    "unit_id": "step_2_1",
+    "phase_id": "loop_1",
+    "phase_name": "Burn-in Loop",
     "phase_type": "loop",
     "loop_type": "condition",
     "loop_count": null,
     "steps": [
       {
-        "step_id": "step_1_1",
-        "name": "Enable WB",
+        "step_id": "step_2_1",
+        "name": "關閉 Write Booster",
         "scsi_cmd": null,
-        "ufs_query": "SET FLAG (fWriteBoosterEn, IDN 0x0E)",
+        "ufs_query": "CLEAR FLAG (0x05)",
         "opcode": null,
-        "query_opcode": "0x02 (SET FLAG)",
-        "idn": "0x0E (fWriteBoosterEn)",
-        "expected": "`QUERY RESPONSE Success`",
+        "query_opcode": null,
+        "idn": null,
+        "expected": "",
         "fail_condition": null,
         "on_fail": null,
         "produces": [],
-        "consumes": [],
-        "raw_content": "**UFS QUERY**: `SET FLAG (fWriteBoosterEn, IDN 0x0E)`\n\n| Field | Value |\n|-------|-------|\n| Query Opcode | 0x02 (SET FLAG) |\n| IDN | 0x0E (fWriteBoosterEn) |\n| Value | 0x01 |\n\n**Expected**: `QUERY RESPONSE Success`。\n\n---"
+        "consumes": [
+          "max_capacity_lun"
+        ],
+        "raw_content": "**UFS QUERY**: `CLEAR FLAG (0x05)` — fWriteBoosterEn (IDN 0x0E)\n\n**目的**: 清除 fWriteBoosterEn Flag，退出 Write Booster 模式，使後續寫入不再使用 WB Buffer。\n\n| Field | Value |\n|-------|-------|\n| Opcode (Query) | 0x05 (CLEAR FLAG) |\n| bFlagIDN | 0x0E (fWriteBoosterEn) |\n| LUN | 0x00 |\n\n**UFS SPEC Reference**: JESD220H Section 10.7.8 (CLEAR FLAG), Section 14.2 (Flags)\n\n---"
       }
     ],
     "produces": [],
-    "consumes": [],
+    "consumes": [
+      "max_capacity_lun"
+    ],
     "helper_methods": [],
     "loop_idx_param": true,
     "set_vars": [],
     "available_vars": [
-      "max_lba",
-      "wb_supported",
+      "max_capacity_lun",
+      "wb_support",
+      "config_descriptor_data",
       "max_alloc_units",
-      "config_descriptor_data"
+      "write_record_p1"
     ]
   },
   {
     "index": 8,
-    "method": "_loop4_step_1_2",
-    "kind": "loop_substep",
-    "unit_id": "step_1_2",
-    "phase_id": "loop_4",
-    "phase_name": "Burn-in",
-    "phase_type": "loop",
-    "loop_type": "condition",
-    "loop_count": null,
-    "steps": [
-      {
-        "step_id": "step_1_2",
-        "name": "確認 WB 已啟用",
-        "scsi_cmd": null,
-        "ufs_query": "READ FLAG (fWriteBoosterEn)",
-        "opcode": null,
-        "query_opcode": "0x01 (READ FLAG)",
-        "idn": "0x0E",
-        "expected": "`fWriteBoosterEn == 1`",
-        "fail_condition": null,
-        "on_fail": null,
-        "produces": [],
-        "consumes": [],
-        "raw_content": "**UFS QUERY**: `READ FLAG (fWriteBoosterEn)`\n\n| Field | Value |\n|-------|-------|\n| Query Opcode | 0x01 (READ FLAG) |\n| IDN | 0x0E |\n\n**Expected**: `fWriteBoosterEn == 1`。\n\n---"
-      }
-    ],
-    "produces": [],
-    "consumes": [],
-    "helper_methods": [],
-    "loop_idx_param": true,
-    "set_vars": [],
-    "available_vars": [
-      "max_lba",
-      "wb_supported",
-      "max_alloc_units",
-      "config_descriptor_data"
-    ]
-  },
-  {
-    "index": 9,
-    "method": "_loop4_step_1_3",
-    "kind": "loop_substep",
-    "unit_id": "step_1_3",
-    "phase_id": "loop_4",
-    "phase_name": "Burn-in",
-    "phase_type": "loop",
-    "loop_type": "condition",
-    "loop_count": null,
-    "steps": [
-      {
-        "step_id": "step_1_3",
-        "name": "Write Test Data",
-        "scsi_cmd": "WRITE(10) (2Ah)",
-        "ufs_query": null,
-        "opcode": "0x2A",
-        "query_opcode": null,
-        "idn": null,
-        "expected": "`GOOD Status`",
-        "fail_condition": null,
-        "on_fail": null,
-        "produces": [
-          "write_lba",
-          "write_len",
-          "write_data"
-        ],
-        "consumes": [
-          "max_lba"
-        ],
-        "raw_content": "**SCSI CMD**: `WRITE(10) (2Ah)`\n\n| Field | Value |\n|-------|-------|\n| Opcode | 0x2A |\n| LUN | All LUNs |\n| LBA | Random |\n| Transfer Length | Random |\n\n**Expected**: `GOOD Status`。\n\n---"
-      }
-    ],
-    "produces": [
-      "write_lba",
-      "write_len",
-      "write_data"
-    ],
-    "consumes": [
-      "max_lba"
-    ],
-    "helper_methods": [],
-    "loop_idx_param": true,
-    "set_vars": [
-      "write_lba",
-      "write_len",
-      "write_data"
-    ],
-    "available_vars": [
-      "max_lba",
-      "wb_supported",
-      "max_alloc_units",
-      "config_descriptor_data"
-    ]
-  },
-  {
-    "index": 10,
-    "method": "_loop4_step_1_4",
-    "kind": "loop_substep",
-    "unit_id": "step_1_4",
-    "phase_id": "loop_4",
-    "phase_name": "Burn-in",
-    "phase_type": "loop",
-    "loop_type": "condition",
-    "loop_count": null,
-    "steps": [
-      {
-        "step_id": "step_1_4",
-        "name": "Read Compare",
-        "scsi_cmd": "READ(10) (28h)",
-        "ufs_query": null,
-        "opcode": "0x28",
-        "query_opcode": null,
-        "idn": null,
-        "expected": "`GOOD Status`, `Data Match`",
-        "fail_condition": "NOT (`GOOD Status`, `Data Match`)",
-        "on_fail": "abort",
-        "produces": [],
-        "consumes": [
-          "write_lba",
-          "write_len",
-          "write_data"
-        ],
-        "raw_content": "**SCSI CMD**: `READ(10) (28h)`\n\n| Field | Value |\n|-------|-------|\n| Opcode | 0x28 |\n| LUN | Step 1.3 LUN |\n| LBA | Step 1.3 LBA |\n| Transfer Length | Step 1.3 大小 |\n\n**Expected**: `GOOD Status`, `Data Match`。\n\n---"
-      }
-    ],
-    "produces": [],
-    "consumes": [
-      "write_lba",
-      "write_len",
-      "write_data"
-    ],
-    "helper_methods": [],
-    "loop_idx_param": true,
-    "set_vars": [],
-    "available_vars": [
-      "max_lba",
-      "wb_supported",
-      "max_alloc_units",
-      "config_descriptor_data",
-      "write_lba",
-      "write_len",
-      "write_data"
-    ]
-  },
-  {
-    "index": 11,
-    "method": "_loop4_step_1_5",
-    "kind": "loop_substep",
-    "unit_id": "step_1_5",
-    "phase_id": "loop_4",
-    "phase_name": "Burn-in",
-    "phase_type": "loop",
-    "loop_type": "condition",
-    "loop_count": null,
-    "steps": [
-      {
-        "step_id": "step_1_5",
-        "name": "Random Reset",
-        "scsi_cmd": null,
-        "ufs_query": null,
-        "opcode": null,
-        "query_opcode": null,
-        "idn": null,
-        "expected": "`fDeviceInit == 1`",
-        "fail_condition": null,
-        "on_fail": null,
-        "produces": [],
-        "consumes": [],
-        "raw_content": "**Reset Types**（隨機）:\n\n| Type | 說明 |\n|:---|:---|\n| SSU | START STOP UNIT Power Cycle |\n| POR | Power-On Reset |\n| LINKSTARTUP | Link re-startup |\n\n**Expected**: `fDeviceInit == 1`。\n\n---"
-      }
-    ],
-    "produces": [],
-    "consumes": [],
-    "helper_methods": [],
-    "loop_idx_param": true,
-    "set_vars": [],
-    "available_vars": [
-      "max_lba",
-      "wb_supported",
-      "max_alloc_units",
-      "config_descriptor_data",
-      "write_lba",
-      "write_len",
-      "write_data"
-    ]
-  },
-  {
-    "index": 12,
-    "method": "_loop4_step_1_6",
-    "kind": "loop_substep",
-    "unit_id": "step_1_6",
-    "phase_id": "loop_4",
-    "phase_name": "Burn-in",
-    "phase_type": "loop",
-    "loop_type": "condition",
-    "loop_count": null,
-    "steps": [
-      {
-        "step_id": "step_1_6",
-        "name": "驗證 Reset 後 WB Flag",
-        "scsi_cmd": null,
-        "ufs_query": "READ FLAG (fWriteBoosterEn)",
-        "opcode": null,
-        "query_opcode": null,
-        "idn": null,
-        "expected": "依 SPEC 定義確認 volatile flag 狀態",
-        "fail_condition": null,
-        "on_fail": null,
-        "produces": [],
-        "consumes": [],
-        "raw_content": "**UFS QUERY**: `READ FLAG (fWriteBoosterEn)`\n\n**Expected**: 依 SPEC 定義確認 volatile flag 狀態。\n\n---\n\n### Phase 2: WB Disable + W/R + Reset"
-      }
-    ],
-    "produces": [],
-    "consumes": [],
-    "helper_methods": [],
-    "loop_idx_param": true,
-    "set_vars": [],
-    "available_vars": [
-      "max_lba",
-      "wb_supported",
-      "max_alloc_units",
-      "config_descriptor_data",
-      "write_lba",
-      "write_len",
-      "write_data"
-    ]
-  },
-  {
-    "index": 13,
-    "method": "_loop4_step_2_1",
-    "kind": "loop_substep",
-    "unit_id": "step_2_1",
-    "phase_id": "loop_4",
-    "phase_name": "Burn-in",
-    "phase_type": "loop",
-    "loop_type": "condition",
-    "loop_count": null,
-    "steps": [
-      {
-        "step_id": "step_2_1",
-        "name": "Write Test Data",
-        "scsi_cmd": "WRITE(10) (2Ah)",
-        "ufs_query": null,
-        "opcode": "0x2A",
-        "query_opcode": null,
-        "idn": null,
-        "expected": "`GOOD Status`",
-        "fail_condition": null,
-        "on_fail": null,
-        "produces": [
-          "write_lba",
-          "write_len",
-          "write_data"
-        ],
-        "consumes": [
-          "max_lba"
-        ],
-        "raw_content": "**SCSI CMD**: `WRITE(10) (2Ah)`\n\n| Field | Value |\n|-------|-------|\n| Opcode | 0x2A |\n| FUA | 0 |\n\n**Expected**: `GOOD Status`。\n\n---"
-      }
-    ],
-    "produces": [
-      "write_lba",
-      "write_len",
-      "write_data"
-    ],
-    "consumes": [
-      "max_lba"
-    ],
-    "helper_methods": [],
-    "loop_idx_param": true,
-    "set_vars": [
-      "write_lba",
-      "write_len",
-      "write_data"
-    ],
-    "available_vars": [
-      "max_lba",
-      "wb_supported",
-      "max_alloc_units",
-      "config_descriptor_data",
-      "write_lba",
-      "write_len",
-      "write_data"
-    ]
-  },
-  {
-    "index": 14,
-    "method": "_loop4_step_2_2",
+    "method": "_loop1_step_2_2",
     "kind": "loop_substep",
     "unit_id": "step_2_2",
-    "phase_id": "loop_4",
-    "phase_name": "Burn-in",
+    "phase_id": "loop_1",
+    "phase_name": "Burn-in Loop",
     "phase_type": "loop",
     "loop_type": "condition",
     "loop_count": null,
     "steps": [
       {
         "step_id": "step_2_2",
-        "name": "Disable WB",
-        "scsi_cmd": null,
-        "ufs_query": "CLEAR FLAG (fWriteBoosterEn)",
-        "opcode": null,
-        "query_opcode": "0x05 (CLEAR FLAG)",
-        "idn": "0x0E",
-        "expected": "`QUERY RESPONSE Success`",
+        "name": "隨機寫入（Write Booster 已退出）",
+        "scsi_cmd": "WRITE(10) (2Ah)",
+        "ufs_query": null,
+        "opcode": "0x2A",
+        "query_opcode": null,
+        "idn": null,
+        "expected": "",
         "fail_condition": null,
         "on_fail": null,
-        "produces": [],
-        "consumes": [],
-        "raw_content": "**UFS QUERY**: `CLEAR FLAG (fWriteBoosterEn)`\n\n| Field | Value |\n|-------|-------|\n| Query Opcode | 0x05 (CLEAR FLAG) |\n| IDN | 0x0E |\n\n**Expected**: `QUERY RESPONSE Success`。\n\n---"
+        "produces": [
+          "write_record_p2"
+        ],
+        "consumes": [
+          "max_capacity_lun"
+        ],
+        "raw_content": "**SCSI CMD**: `WRITE(10) (2Ah)`\n\n**目的**: 在 Write Booster 已退出的狀態下，對隨機 LBA 執行寫入操作，資料直接寫入 NAND。\n\n| Field | Value |\n|-------|-------|\n| Opcode | 0x2A |\n| LUN | 0x00 |\n| LBA | 隨機（依 Test LBA Range） |\n| Transfer Length | 隨機區塊數（依測試設計） |\n| Data | 隨機 Pattern |\n\n**UFS SPEC Reference**: JESD220H Section 12.2.3 (WRITE(10)), SBC-4 Section 5.27\n\n---"
       }
     ],
-    "produces": [],
-    "consumes": [],
+    "produces": [
+      "write_record_p2"
+    ],
+    "consumes": [
+      "max_capacity_lun"
+    ],
     "helper_methods": [],
     "loop_idx_param": true,
-    "set_vars": [],
+    "set_vars": [
+      "write_record_p2"
+    ],
     "available_vars": [
-      "max_lba",
-      "wb_supported",
-      "max_alloc_units",
+      "max_capacity_lun",
+      "wb_support",
       "config_descriptor_data",
-      "write_lba",
-      "write_len",
-      "write_data"
+      "max_alloc_units",
+      "write_record_p1"
     ]
   },
   {
-    "index": 15,
-    "method": "_loop4_step_2_3",
+    "index": 9,
+    "method": "_loop1_step_2_3",
     "kind": "loop_substep",
     "unit_id": "step_2_3",
-    "phase_id": "loop_4",
-    "phase_name": "Burn-in",
+    "phase_id": "loop_1",
+    "phase_name": "Burn-in Loop",
     "phase_type": "loop",
     "loop_type": "condition",
     "loop_count": null,
     "steps": [
       {
         "step_id": "step_2_3",
-        "name": "Read Compare",
+        "name": "隨機讀取與資料比對",
         "scsi_cmd": "READ(10) (28h)",
         "ufs_query": null,
-        "opcode": null,
+        "opcode": "0x28",
         "query_opcode": null,
         "idn": null,
-        "expected": "`GOOD Status`, `Data Match`",
-        "fail_condition": "NOT (`GOOD Status`, `Data Match`)",
-        "on_fail": "abort",
+        "expected": "",
+        "fail_condition": null,
+        "on_fail": null,
         "produces": [],
         "consumes": [
-          "write_lba",
-          "write_len",
-          "write_data"
+          "write_record_p2"
         ],
-        "raw_content": "**SCSI CMD**: `READ(10) (28h)`\n\n**Expected**: `GOOD Status`, `Data Match`。\n\n---"
+        "raw_content": "**SCSI CMD**: `READ(10) (28h)`\n\n**目的**: 讀回 Step 2.2 寫入的 LBA，比對資料正確性（Data Compare），驗證 WB 退出後寫入的資料正確。\n\n| Field | Value |\n|-------|-------|\n| Opcode | 0x28 |\n| LUN | 0x00 |\n| LBA | 與 Step 2.2 寫入的 LBA 相同 |\n| Transfer Length | 與 Step 2.2 寫入長度相同 |\n\n**UFS SPEC Reference**: JESD220H Section 12.2.2 (READ(10)), SBC-4 Section 5.17\n\n---"
       }
     ],
     "produces": [],
     "consumes": [
-      "write_lba",
-      "write_len",
-      "write_data"
+      "write_record_p2"
     ],
     "helper_methods": [],
     "loop_idx_param": true,
     "set_vars": [],
     "available_vars": [
-      "max_lba",
-      "wb_supported",
-      "max_alloc_units",
+      "max_capacity_lun",
+      "wb_support",
       "config_descriptor_data",
-      "write_lba",
-      "write_len",
-      "write_data"
+      "max_alloc_units",
+      "write_record_p1",
+      "write_record_p2"
     ]
   },
   {
-    "index": 16,
-    "method": "_loop4_step_2_4",
+    "index": 10,
+    "method": "_loop1_step_2_4",
     "kind": "loop_substep",
     "unit_id": "step_2_4",
-    "phase_id": "loop_4",
-    "phase_name": "Burn-in",
+    "phase_id": "loop_1",
+    "phase_name": "Burn-in Loop",
     "phase_type": "loop",
     "loop_type": "condition",
     "loop_count": null,
     "steps": [
       {
         "step_id": "step_2_4",
-        "name": "Random Reset",
+        "name": "POR（Power On Reset）",
         "scsi_cmd": null,
         "ufs_query": null,
         "opcode": null,
         "query_opcode": null,
         "idn": null,
-        "expected": "`fDeviceInit == 1`",
+        "expected": "Reset device success",
         "fail_condition": null,
         "on_fail": null,
         "produces": [],
         "consumes": [],
-        "raw_content": "同 Step 1.5。\n\n**Expected**: `fDeviceInit == 1`。\n\n---"
+        "raw_content": "**操作**: `Power On Reset`\n\n**目的**: 對裝置執行 Power On Reset，驗證 WB 退出後經過 POR 的穩定性。\n\n| Field | Value |\n|-------|-------|\n| Reset Type | POR (Power On Reset) |\n| 後續 | 等待裝置就緒（fDeviceInit == 0） |\n\n**Expected**: Reset device success\n\n**UFS SPEC Reference**: JESD220H Section 10.7.1.1 (Power On Reset)\n\n---"
       }
     ],
     "produces": [],
@@ -697,40 +442,84 @@
     "loop_idx_param": true,
     "set_vars": [],
     "available_vars": [
-      "max_lba",
-      "wb_supported",
-      "max_alloc_units",
+      "max_capacity_lun",
+      "wb_support",
       "config_descriptor_data",
-      "write_lba",
-      "write_len",
-      "write_data"
+      "max_alloc_units",
+      "write_record_p1",
+      "write_record_p2"
     ]
   },
   {
-    "index": 17,
-    "method": "_loop4_step_2_5",
+    "index": 11,
+    "method": "_loop1_step_3_1",
     "kind": "loop_substep",
-    "unit_id": "step_2_5",
-    "phase_id": "loop_4",
-    "phase_name": "Burn-in",
+    "unit_id": "step_3_1",
+    "phase_id": "loop_1",
+    "phase_name": "Burn-in Loop",
     "phase_type": "loop",
     "loop_type": "condition",
     "loop_count": null,
     "steps": [
       {
-        "step_id": "step_2_5",
-        "name": "驗證 WB Disabled",
+        "step_id": "step_3_1",
+        "name": "設定 Flush Flag（隨機選擇）",
         "scsi_cmd": null,
-        "ufs_query": "READ FLAG (fWriteBoosterEn)",
+        "ufs_query": "SET FLAG (0x02)",
         "opcode": null,
         "query_opcode": null,
-        "idn": "Name",
-        "expected": "`fWriteBoosterEn == 0`",
+        "idn": null,
+        "expected": "",
+        "fail_condition": null,
+        "on_fail": null,
+        "produces": [],
+        "consumes": [
+          "max_capacity_lun"
+        ],
+        "raw_content": "**UFS QUERY**: `SET FLAG (0x02)` — 分支選擇\n\n**目的**: 依 50%/50% 機率隨機選擇設定 fWriteBoosterBufferFlushEn 或 fWriteBoosterBufferFlushDuringHibernate，為後續 Reset 場景建立前置條件。\n\n| Field | Value |\n|-------|-------|\n| Opcode (Query) | 0x02 (SET FLAG) |\n| bFlagIDN | **Branch 1 (50%)**: 0x0F (fWriteBoosterBufferFlushEn) |\n| | **Branch 2 (50%)**: 0x10 (fWriteBoosterBufferFlushDuringHibernate) |\n| LUN | 0x00 |\n\n**Branch Logic** (per JIRA weighted random):\n- 50%: SET FLAG fWriteBoosterBufferFlushEn (0x0F) — Enable WB buffer flush\n- 50%: SET FLAG fWriteBoosterBufferFlushDuringHibernate (0x10) — Enable flush during Hibernate\n\n**UFS SPEC Reference**: JESD220H Section 10.7.8 (SET FLAG), Section 14.2 (Flags)\n\n---"
+      }
+    ],
+    "produces": [],
+    "consumes": [
+      "max_capacity_lun"
+    ],
+    "helper_methods": [],
+    "loop_idx_param": true,
+    "set_vars": [],
+    "available_vars": [
+      "max_capacity_lun",
+      "wb_support",
+      "config_descriptor_data",
+      "max_alloc_units",
+      "write_record_p1",
+      "write_record_p2"
+    ]
+  },
+  {
+    "index": 12,
+    "method": "_loop1_step_3_2",
+    "kind": "loop_substep",
+    "unit_id": "step_3_2",
+    "phase_id": "loop_1",
+    "phase_name": "Burn-in Loop",
+    "phase_type": "loop",
+    "loop_type": "condition",
+    "loop_count": null,
+    "steps": [
+      {
+        "step_id": "step_3_2",
+        "name": "隨機延遲",
+        "scsi_cmd": null,
+        "ufs_query": null,
+        "opcode": null,
+        "query_opcode": null,
+        "idn": null,
+        "expected": "",
         "fail_condition": null,
         "on_fail": null,
         "produces": [],
         "consumes": [],
-        "raw_content": "**UFS QUERY**: `READ FLAG (fWriteBoosterEn)`\n\n**Expected**: `fWriteBoosterEn == 0`。\n\n---\n\n### Phase 3: Flush Enable + Reset\n\n#### Step 3.1/3.2: [Branch 50%/50%] Set Flush Flag\n\n**UFS QUERY**: `SET FLAG`\n\n| Branch | IDN | Name |\n|:---|:---|:---|\n| 50% | 0x0B | fWriteBoosterBufferFlushEn |\n| 50% | 0x0C | fWriteBoosterBufferFlushDuringHibernate |\n\n**Expected**: `QUERY RESPONSE Success`。\n\n---"
+        "raw_content": "**操作**: `Delay`\n\n**目的**: 等待一段隨機延遲時間（0~2 秒），模擬實際使用場景中的非同步事件間隔，觸發 WB Buffer Flush 行為。\n\n| Field | Value |\n|-------|-------|\n| Delay Range | 0 ~ 2 秒（均勻隨機） |\n\n**UFS SPEC Reference**: N/A（純延遲操作，無 SPEC 參照）\n\n---"
       }
     ],
     "produces": [],
@@ -739,40 +528,39 @@
     "loop_idx_param": true,
     "set_vars": [],
     "available_vars": [
-      "max_lba",
-      "wb_supported",
-      "max_alloc_units",
+      "max_capacity_lun",
+      "wb_support",
       "config_descriptor_data",
-      "write_lba",
-      "write_len",
-      "write_data"
+      "max_alloc_units",
+      "write_record_p1",
+      "write_record_p2"
     ]
   },
   {
-    "index": 18,
-    "method": "_loop4_step_3_3",
+    "index": 13,
+    "method": "_loop1_step_3_3",
     "kind": "loop_substep",
     "unit_id": "step_3_3",
-    "phase_id": "loop_4",
-    "phase_name": "Burn-in",
+    "phase_id": "loop_1",
+    "phase_name": "Burn-in Loop",
     "phase_type": "loop",
     "loop_type": "condition",
     "loop_count": null,
     "steps": [
       {
         "step_id": "step_3_3",
-        "name": "Random Delay",
+        "name": "POR（Power On Reset）",
         "scsi_cmd": null,
         "ufs_query": null,
         "opcode": null,
         "query_opcode": null,
         "idn": null,
-        "expected": "Delay 完成",
+        "expected": "Reset device success",
         "fail_condition": null,
         "on_fail": null,
         "produces": [],
         "consumes": [],
-        "raw_content": "**目的**: 延遲 0~2 秒，等待 Flush 觸發。\n\n**Expected**: Delay 完成。\n\n---"
+        "raw_content": "**操作**: `Power On Reset`\n\n**目的**: 在 Flush Flag 設定後執行 POR，驗證 WB Buffer Flush 機制在 POR 下的行為。\n\n| Field | Value |\n|-------|-------|\n| Reset Type | POR (Power On Reset) |\n| 後續 | 等待裝置就緒（fDeviceInit == 0） |\n\n**Expected**: Reset device success\n\n**UFS SPEC Reference**: JESD220H Section 10.7.1.1 (Power On Reset)\n\n---"
       }
     ],
     "produces": [],
@@ -781,82 +569,84 @@
     "loop_idx_param": true,
     "set_vars": [],
     "available_vars": [
-      "max_lba",
-      "wb_supported",
-      "max_alloc_units",
+      "max_capacity_lun",
+      "wb_support",
       "config_descriptor_data",
-      "write_lba",
-      "write_len",
-      "write_data"
+      "max_alloc_units",
+      "write_record_p1",
+      "write_record_p2"
     ]
   },
   {
-    "index": 19,
-    "method": "_loop4_step_3_4",
+    "index": 14,
+    "method": "_loop1_step_3_4",
     "kind": "loop_substep",
     "unit_id": "step_3_4",
-    "phase_id": "loop_4",
-    "phase_name": "Burn-in",
+    "phase_id": "loop_1",
+    "phase_name": "Burn-in Loop",
     "phase_type": "loop",
     "loop_type": "condition",
     "loop_count": null,
     "steps": [
       {
         "step_id": "step_3_4",
-        "name": "Random Reset",
-        "scsi_cmd": null,
+        "name": "START STOP UNIT — 進入 Sleep 模式",
+        "scsi_cmd": "START STOP UNIT (1Bh)",
         "ufs_query": null,
-        "opcode": null,
+        "opcode": "0x1B",
         "query_opcode": null,
         "idn": null,
-        "expected": "`fDeviceInit == 1`",
+        "expected": "",
         "fail_condition": null,
         "on_fail": null,
         "produces": [],
-        "consumes": [],
-        "raw_content": "**Reset Types**（隨機）:\n\n| Type | 說明 |\n|:---|:---|\n| POR_delay | POR with delay |\n| SSU+Hibernate+POR | SSU → Hibernate → POR |\n\n**Expected**: `fDeviceInit == 1`。\n\n---"
+        "consumes": [
+          "max_capacity_lun"
+        ],
+        "raw_content": "**SCSI CMD**: `START STOP UNIT (1Bh)`\n\n**目的**: 將裝置轉入 Sleep 低功耗模式，模擬 Hibernate/SSU 場景後再進行 POR。\n\n| Field | Value |\n|-------|-------|\n| Opcode | 0x1B |\n| START | 0 (Stop) |\n| Power Condition | 0x02 (Sleep) |\n| IMMED | 0x00 |\n\n**UFS SPEC Reference**: JESD220H Section 12.2.8 (START STOP UNIT), SBC-4 Section 5.22\n\n---"
       }
     ],
     "produces": [],
-    "consumes": [],
+    "consumes": [
+      "max_capacity_lun"
+    ],
     "helper_methods": [],
     "loop_idx_param": true,
     "set_vars": [],
     "available_vars": [
-      "max_lba",
-      "wb_supported",
-      "max_alloc_units",
+      "max_capacity_lun",
+      "wb_support",
       "config_descriptor_data",
-      "write_lba",
-      "write_len",
-      "write_data"
+      "max_alloc_units",
+      "write_record_p1",
+      "write_record_p2"
     ]
   },
   {
-    "index": 20,
-    "method": "_loop4_step_3_5",
+    "index": 15,
+    "method": "_loop1_step_3_5",
     "kind": "loop_substep",
     "unit_id": "step_3_5",
-    "phase_id": "loop_4",
-    "phase_name": "Burn-in",
+    "phase_id": "loop_1",
+    "phase_name": "Burn-in Loop",
     "phase_type": "loop",
     "loop_type": "condition",
     "loop_count": null,
     "steps": [
       {
         "step_id": "step_3_5",
-        "name": "驗證 Flush Flag",
+        "name": "POR（Power On Reset）",
         "scsi_cmd": null,
-        "ufs_query": "READ FLAG (依 Step 3.1/3.2 選擇的 flag)",
+        "ufs_query": null,
         "opcode": null,
         "query_opcode": null,
         "idn": null,
-        "expected": "確認 reset 後 flush flag 狀態符合 SPEC",
+        "expected": "Reset device success",
         "fail_condition": null,
         "on_fail": null,
         "produces": [],
         "consumes": [],
-        "raw_content": "**UFS QUERY**: `READ FLAG (依 Step 3.1/3.2 選擇的 flag)`\n\n**Expected**: 確認 reset 後 flush flag 狀態符合 SPEC。\n\n---"
+        "raw_content": "**操作**: `Power On Reset`\n\n**目的**: 從 Sleep 狀態執行 POR，驗證 WB Buffer Flush 在 Sleep → POR 路徑下的穩定性。\n\n| Field | Value |\n|-------|-------|\n| Reset Type | POR (Power On Reset) |\n| 後續 | 等待裝置就緒（fDeviceInit == 0） |\n\n**Expected**: Reset device success\n\n**UFS SPEC Reference**: JESD220H Section 10.7.1.1 (Power On Reset)\n\n---"
       }
     ],
     "produces": [],
@@ -865,280 +655,262 @@
     "loop_idx_param": true,
     "set_vars": [],
     "available_vars": [
-      "max_lba",
-      "wb_supported",
-      "max_alloc_units",
+      "max_capacity_lun",
+      "wb_support",
       "config_descriptor_data",
-      "write_lba",
-      "write_len",
-      "write_data"
+      "max_alloc_units",
+      "write_record_p1",
+      "write_record_p2"
     ]
   },
   {
-    "index": 21,
-    "method": "step7",
+    "index": 16,
+    "method": "step3",
     "kind": "loop_wrapper",
-    "unit_id": "loop_4",
-    "phase_id": "loop_4",
-    "phase_name": "Burn-in",
+    "unit_id": "loop_1",
+    "phase_id": "loop_1",
+    "phase_name": "Burn-in Loop",
     "phase_type": "loop",
     "loop_type": "condition",
     "loop_count": null,
     "steps": [
       {
         "step_id": "step_1_1",
-        "name": "Enable WB",
+        "name": "啟用 Write Booster",
         "scsi_cmd": null,
-        "ufs_query": "SET FLAG (fWriteBoosterEn, IDN 0x0E)",
+        "ufs_query": "SET FLAG (0x02)",
         "opcode": null,
-        "query_opcode": "0x02 (SET FLAG)",
-        "idn": "0x0E (fWriteBoosterEn)",
-        "expected": "`QUERY RESPONSE Success`",
+        "query_opcode": null,
+        "idn": null,
+        "expected": "",
         "fail_condition": null,
         "on_fail": null,
         "produces": [],
-        "consumes": [],
-        "raw_content": "**UFS QUERY**: `SET FLAG (fWriteBoosterEn, IDN 0x0E)`\n\n| Field | Value |\n|-------|-------|\n| Query Opcode | 0x02 (SET FLAG) |\n| IDN | 0x0E (fWriteBoosterEn) |\n| Value | 0x01 |\n\n**Expected**: `QUERY RESPONSE Success`。\n\n---"
+        "consumes": [
+          "max_capacity_lun"
+        ],
+        "raw_content": "**UFS QUERY**: `SET FLAG (0x02)` — fWriteBoosterEn (IDN 0x0E)\n\n**目的**: 設定 fWriteBoosterEn Flag，啟用 Write Booster 功能，使後續寫入操作使用 WB Buffer。\n\n| Field | Value |\n|-------|-------|\n| Opcode (Query) | 0x02 (SET FLAG) |\n| bFlagIDN | 0x0E (fWriteBoosterEn) |\n| LUN | 0x00 |\n\n**UFS SPEC Reference**: JESD220H Section 10.7.8 (SET FLAG), Section 14.2 (Flags)\n\n---"
       },
       {
         "step_id": "step_1_2",
-        "name": "確認 WB 已啟用",
-        "scsi_cmd": null,
-        "ufs_query": "READ FLAG (fWriteBoosterEn)",
-        "opcode": null,
-        "query_opcode": "0x01 (READ FLAG)",
-        "idn": "0x0E",
-        "expected": "`fWriteBoosterEn == 1`",
-        "fail_condition": null,
-        "on_fail": null,
-        "produces": [],
-        "consumes": [],
-        "raw_content": "**UFS QUERY**: `READ FLAG (fWriteBoosterEn)`\n\n| Field | Value |\n|-------|-------|\n| Query Opcode | 0x01 (READ FLAG) |\n| IDN | 0x0E |\n\n**Expected**: `fWriteBoosterEn == 1`。\n\n---"
-      },
-      {
-        "step_id": "step_1_3",
-        "name": "Write Test Data",
+        "name": "隨機寫入（Write Booster 啟用中）",
         "scsi_cmd": "WRITE(10) (2Ah)",
         "ufs_query": null,
         "opcode": "0x2A",
         "query_opcode": null,
         "idn": null,
-        "expected": "`GOOD Status`",
+        "expected": "",
         "fail_condition": null,
         "on_fail": null,
         "produces": [
-          "write_lba",
-          "write_len",
-          "write_data"
+          "write_record_p1"
         ],
         "consumes": [
-          "max_lba"
+          "max_capacity_lun"
         ],
-        "raw_content": "**SCSI CMD**: `WRITE(10) (2Ah)`\n\n| Field | Value |\n|-------|-------|\n| Opcode | 0x2A |\n| LUN | All LUNs |\n| LBA | Random |\n| Transfer Length | Random |\n\n**Expected**: `GOOD Status`。\n\n---"
+        "raw_content": "**SCSI CMD**: `WRITE(10) (2Ah)`\n\n**目的**: 在 Write Booster 啟用狀態下，對隨機 LBA 執行寫入操作，資料經由 WB Buffer。\n\n| Field | Value |\n|-------|-------|\n| Opcode | 0x2A |\n| LUN | 0x00 |\n| LBA | 隨機（依 Test LBA Range） |\n| Transfer Length | 隨機區塊數（依測試設計） |\n| Data | 隨機 Pattern |\n\n**UFS SPEC Reference**: JESD220H Section 12.2.3 (WRITE(10)), SBC-4 Section 5.27\n\n---"
       },
       {
-        "step_id": "step_1_4",
-        "name": "Read Compare",
+        "step_id": "step_1_3",
+        "name": "隨機讀取與資料比對",
         "scsi_cmd": "READ(10) (28h)",
         "ufs_query": null,
         "opcode": "0x28",
         "query_opcode": null,
         "idn": null,
-        "expected": "`GOOD Status`, `Data Match`",
-        "fail_condition": "NOT (`GOOD Status`, `Data Match`)",
-        "on_fail": "abort",
+        "expected": "",
+        "fail_condition": null,
+        "on_fail": null,
         "produces": [],
         "consumes": [
-          "write_lba",
-          "write_len",
-          "write_data"
+          "write_record_p1"
         ],
-        "raw_content": "**SCSI CMD**: `READ(10) (28h)`\n\n| Field | Value |\n|-------|-------|\n| Opcode | 0x28 |\n| LUN | Step 1.3 LUN |\n| LBA | Step 1.3 LBA |\n| Transfer Length | Step 1.3 大小 |\n\n**Expected**: `GOOD Status`, `Data Match`。\n\n---"
+        "raw_content": "**SCSI CMD**: `READ(10) (28h)`\n\n**目的**: 讀回 Step 1.2 寫入的 LBA，比對資料正確性（Data Compare），驗證 WB Buffer 中的資料可正確讀取。\n\n| Field | Value |\n|-------|-------|\n| Opcode | 0x28 |\n| LUN | 0x00 |\n| LBA | 與 Step 1.2 寫入的 LBA 相同 |\n| Transfer Length | 與 Step 1.2 寫入長度相同 |\n\n**UFS SPEC Reference**: JESD220H Section 12.2.2 (READ(10)), SBC-4 Section 5.17\n\n---"
       },
       {
-        "step_id": "step_1_5",
-        "name": "Random Reset",
+        "step_id": "step_1_4",
+        "name": "POR（Power On Reset）",
         "scsi_cmd": null,
         "ufs_query": null,
         "opcode": null,
         "query_opcode": null,
         "idn": null,
-        "expected": "`fDeviceInit == 1`",
+        "expected": "Reset device success",
         "fail_condition": null,
         "on_fail": null,
         "produces": [],
         "consumes": [],
-        "raw_content": "**Reset Types**（隨機）:\n\n| Type | 說明 |\n|:---|:---|\n| SSU | START STOP UNIT Power Cycle |\n| POR | Power-On Reset |\n| LINKSTARTUP | Link re-startup |\n\n**Expected**: `fDeviceInit == 1`。\n\n---"
-      },
-      {
-        "step_id": "step_1_6",
-        "name": "驗證 Reset 後 WB Flag",
-        "scsi_cmd": null,
-        "ufs_query": "READ FLAG (fWriteBoosterEn)",
-        "opcode": null,
-        "query_opcode": null,
-        "idn": null,
-        "expected": "依 SPEC 定義確認 volatile flag 狀態",
-        "fail_condition": null,
-        "on_fail": null,
-        "produces": [],
-        "consumes": [],
-        "raw_content": "**UFS QUERY**: `READ FLAG (fWriteBoosterEn)`\n\n**Expected**: 依 SPEC 定義確認 volatile flag 狀態。\n\n---\n\n### Phase 2: WB Disable + W/R + Reset"
+        "raw_content": "**操作**: `Power On Reset`\n\n**目的**: 對裝置執行 Power On Reset，驗證 WB 啟用狀態下經過 POR 後的穩定性。\n\n| Field | Value |\n|-------|-------|\n| Reset Type | POR (Power On Reset) |\n| 後續 | 等待裝置就緒（fDeviceInit == 0） |\n\n**Expected**: Reset device success\n\n**UFS SPEC Reference**: JESD220H Section 10.7.1.1 (Power On Reset)\n\n---"
       },
       {
         "step_id": "step_2_1",
-        "name": "Write Test Data",
+        "name": "關閉 Write Booster",
+        "scsi_cmd": null,
+        "ufs_query": "CLEAR FLAG (0x05)",
+        "opcode": null,
+        "query_opcode": null,
+        "idn": null,
+        "expected": "",
+        "fail_condition": null,
+        "on_fail": null,
+        "produces": [],
+        "consumes": [
+          "max_capacity_lun"
+        ],
+        "raw_content": "**UFS QUERY**: `CLEAR FLAG (0x05)` — fWriteBoosterEn (IDN 0x0E)\n\n**目的**: 清除 fWriteBoosterEn Flag，退出 Write Booster 模式，使後續寫入不再使用 WB Buffer。\n\n| Field | Value |\n|-------|-------|\n| Opcode (Query) | 0x05 (CLEAR FLAG) |\n| bFlagIDN | 0x0E (fWriteBoosterEn) |\n| LUN | 0x00 |\n\n**UFS SPEC Reference**: JESD220H Section 10.7.8 (CLEAR FLAG), Section 14.2 (Flags)\n\n---"
+      },
+      {
+        "step_id": "step_2_2",
+        "name": "隨機寫入（Write Booster 已退出）",
         "scsi_cmd": "WRITE(10) (2Ah)",
         "ufs_query": null,
         "opcode": "0x2A",
         "query_opcode": null,
         "idn": null,
-        "expected": "`GOOD Status`",
+        "expected": "",
         "fail_condition": null,
         "on_fail": null,
         "produces": [
-          "write_lba",
-          "write_len",
-          "write_data"
+          "write_record_p2"
         ],
         "consumes": [
-          "max_lba"
+          "max_capacity_lun"
         ],
-        "raw_content": "**SCSI CMD**: `WRITE(10) (2Ah)`\n\n| Field | Value |\n|-------|-------|\n| Opcode | 0x2A |\n| FUA | 0 |\n\n**Expected**: `GOOD Status`。\n\n---"
-      },
-      {
-        "step_id": "step_2_2",
-        "name": "Disable WB",
-        "scsi_cmd": null,
-        "ufs_query": "CLEAR FLAG (fWriteBoosterEn)",
-        "opcode": null,
-        "query_opcode": "0x05 (CLEAR FLAG)",
-        "idn": "0x0E",
-        "expected": "`QUERY RESPONSE Success`",
-        "fail_condition": null,
-        "on_fail": null,
-        "produces": [],
-        "consumes": [],
-        "raw_content": "**UFS QUERY**: `CLEAR FLAG (fWriteBoosterEn)`\n\n| Field | Value |\n|-------|-------|\n| Query Opcode | 0x05 (CLEAR FLAG) |\n| IDN | 0x0E |\n\n**Expected**: `QUERY RESPONSE Success`。\n\n---"
+        "raw_content": "**SCSI CMD**: `WRITE(10) (2Ah)`\n\n**目的**: 在 Write Booster 已退出的狀態下，對隨機 LBA 執行寫入操作，資料直接寫入 NAND。\n\n| Field | Value |\n|-------|-------|\n| Opcode | 0x2A |\n| LUN | 0x00 |\n| LBA | 隨機（依 Test LBA Range） |\n| Transfer Length | 隨機區塊數（依測試設計） |\n| Data | 隨機 Pattern |\n\n**UFS SPEC Reference**: JESD220H Section 12.2.3 (WRITE(10)), SBC-4 Section 5.27\n\n---"
       },
       {
         "step_id": "step_2_3",
-        "name": "Read Compare",
+        "name": "隨機讀取與資料比對",
         "scsi_cmd": "READ(10) (28h)",
         "ufs_query": null,
-        "opcode": null,
+        "opcode": "0x28",
         "query_opcode": null,
         "idn": null,
-        "expected": "`GOOD Status`, `Data Match`",
-        "fail_condition": "NOT (`GOOD Status`, `Data Match`)",
-        "on_fail": "abort",
+        "expected": "",
+        "fail_condition": null,
+        "on_fail": null,
         "produces": [],
         "consumes": [
-          "write_lba",
-          "write_len",
-          "write_data"
+          "write_record_p2"
         ],
-        "raw_content": "**SCSI CMD**: `READ(10) (28h)`\n\n**Expected**: `GOOD Status`, `Data Match`。\n\n---"
+        "raw_content": "**SCSI CMD**: `READ(10) (28h)`\n\n**目的**: 讀回 Step 2.2 寫入的 LBA，比對資料正確性（Data Compare），驗證 WB 退出後寫入的資料正確。\n\n| Field | Value |\n|-------|-------|\n| Opcode | 0x28 |\n| LUN | 0x00 |\n| LBA | 與 Step 2.2 寫入的 LBA 相同 |\n| Transfer Length | 與 Step 2.2 寫入長度相同 |\n\n**UFS SPEC Reference**: JESD220H Section 12.2.2 (READ(10)), SBC-4 Section 5.17\n\n---"
       },
       {
         "step_id": "step_2_4",
-        "name": "Random Reset",
+        "name": "POR（Power On Reset）",
         "scsi_cmd": null,
         "ufs_query": null,
         "opcode": null,
         "query_opcode": null,
         "idn": null,
-        "expected": "`fDeviceInit == 1`",
+        "expected": "Reset device success",
         "fail_condition": null,
         "on_fail": null,
         "produces": [],
         "consumes": [],
-        "raw_content": "同 Step 1.5。\n\n**Expected**: `fDeviceInit == 1`。\n\n---"
+        "raw_content": "**操作**: `Power On Reset`\n\n**目的**: 對裝置執行 Power On Reset，驗證 WB 退出後經過 POR 的穩定性。\n\n| Field | Value |\n|-------|-------|\n| Reset Type | POR (Power On Reset) |\n| 後續 | 等待裝置就緒（fDeviceInit == 0） |\n\n**Expected**: Reset device success\n\n**UFS SPEC Reference**: JESD220H Section 10.7.1.1 (Power On Reset)\n\n---"
       },
       {
-        "step_id": "step_2_5",
-        "name": "驗證 WB Disabled",
+        "step_id": "step_3_1",
+        "name": "設定 Flush Flag（隨機選擇）",
         "scsi_cmd": null,
-        "ufs_query": "READ FLAG (fWriteBoosterEn)",
+        "ufs_query": "SET FLAG (0x02)",
         "opcode": null,
         "query_opcode": null,
-        "idn": "Name",
-        "expected": "`fWriteBoosterEn == 0`",
+        "idn": null,
+        "expected": "",
+        "fail_condition": null,
+        "on_fail": null,
+        "produces": [],
+        "consumes": [
+          "max_capacity_lun"
+        ],
+        "raw_content": "**UFS QUERY**: `SET FLAG (0x02)` — 分支選擇\n\n**目的**: 依 50%/50% 機率隨機選擇設定 fWriteBoosterBufferFlushEn 或 fWriteBoosterBufferFlushDuringHibernate，為後續 Reset 場景建立前置條件。\n\n| Field | Value |\n|-------|-------|\n| Opcode (Query) | 0x02 (SET FLAG) |\n| bFlagIDN | **Branch 1 (50%)**: 0x0F (fWriteBoosterBufferFlushEn) |\n| | **Branch 2 (50%)**: 0x10 (fWriteBoosterBufferFlushDuringHibernate) |\n| LUN | 0x00 |\n\n**Branch Logic** (per JIRA weighted random):\n- 50%: SET FLAG fWriteBoosterBufferFlushEn (0x0F) — Enable WB buffer flush\n- 50%: SET FLAG fWriteBoosterBufferFlushDuringHibernate (0x10) — Enable flush during Hibernate\n\n**UFS SPEC Reference**: JESD220H Section 10.7.8 (SET FLAG), Section 14.2 (Flags)\n\n---"
+      },
+      {
+        "step_id": "step_3_2",
+        "name": "隨機延遲",
+        "scsi_cmd": null,
+        "ufs_query": null,
+        "opcode": null,
+        "query_opcode": null,
+        "idn": null,
+        "expected": "",
         "fail_condition": null,
         "on_fail": null,
         "produces": [],
         "consumes": [],
-        "raw_content": "**UFS QUERY**: `READ FLAG (fWriteBoosterEn)`\n\n**Expected**: `fWriteBoosterEn == 0`。\n\n---\n\n### Phase 3: Flush Enable + Reset\n\n#### Step 3.1/3.2: [Branch 50%/50%] Set Flush Flag\n\n**UFS QUERY**: `SET FLAG`\n\n| Branch | IDN | Name |\n|:---|:---|:---|\n| 50% | 0x0B | fWriteBoosterBufferFlushEn |\n| 50% | 0x0C | fWriteBoosterBufferFlushDuringHibernate |\n\n**Expected**: `QUERY RESPONSE Success`。\n\n---"
+        "raw_content": "**操作**: `Delay`\n\n**目的**: 等待一段隨機延遲時間（0~2 秒），模擬實際使用場景中的非同步事件間隔，觸發 WB Buffer Flush 行為。\n\n| Field | Value |\n|-------|-------|\n| Delay Range | 0 ~ 2 秒（均勻隨機） |\n\n**UFS SPEC Reference**: N/A（純延遲操作，無 SPEC 參照）\n\n---"
       },
       {
         "step_id": "step_3_3",
-        "name": "Random Delay",
+        "name": "POR（Power On Reset）",
         "scsi_cmd": null,
         "ufs_query": null,
         "opcode": null,
         "query_opcode": null,
         "idn": null,
-        "expected": "Delay 完成",
+        "expected": "Reset device success",
         "fail_condition": null,
         "on_fail": null,
         "produces": [],
         "consumes": [],
-        "raw_content": "**目的**: 延遲 0~2 秒，等待 Flush 觸發。\n\n**Expected**: Delay 完成。\n\n---"
+        "raw_content": "**操作**: `Power On Reset`\n\n**目的**: 在 Flush Flag 設定後執行 POR，驗證 WB Buffer Flush 機制在 POR 下的行為。\n\n| Field | Value |\n|-------|-------|\n| Reset Type | POR (Power On Reset) |\n| 後續 | 等待裝置就緒（fDeviceInit == 0） |\n\n**Expected**: Reset device success\n\n**UFS SPEC Reference**: JESD220H Section 10.7.1.1 (Power On Reset)\n\n---"
       },
       {
         "step_id": "step_3_4",
-        "name": "Random Reset",
+        "name": "START STOP UNIT — 進入 Sleep 模式",
+        "scsi_cmd": "START STOP UNIT (1Bh)",
+        "ufs_query": null,
+        "opcode": "0x1B",
+        "query_opcode": null,
+        "idn": null,
+        "expected": "",
+        "fail_condition": null,
+        "on_fail": null,
+        "produces": [],
+        "consumes": [
+          "max_capacity_lun"
+        ],
+        "raw_content": "**SCSI CMD**: `START STOP UNIT (1Bh)`\n\n**目的**: 將裝置轉入 Sleep 低功耗模式，模擬 Hibernate/SSU 場景後再進行 POR。\n\n| Field | Value |\n|-------|-------|\n| Opcode | 0x1B |\n| START | 0 (Stop) |\n| Power Condition | 0x02 (Sleep) |\n| IMMED | 0x00 |\n\n**UFS SPEC Reference**: JESD220H Section 12.2.8 (START STOP UNIT), SBC-4 Section 5.22\n\n---"
+      },
+      {
+        "step_id": "step_3_5",
+        "name": "POR（Power On Reset）",
         "scsi_cmd": null,
         "ufs_query": null,
         "opcode": null,
         "query_opcode": null,
         "idn": null,
-        "expected": "`fDeviceInit == 1`",
+        "expected": "Reset device success",
         "fail_condition": null,
         "on_fail": null,
         "produces": [],
         "consumes": [],
-        "raw_content": "**Reset Types**（隨機）:\n\n| Type | 說明 |\n|:---|:---|\n| POR_delay | POR with delay |\n| SSU+Hibernate+POR | SSU → Hibernate → POR |\n\n**Expected**: `fDeviceInit == 1`。\n\n---"
-      },
-      {
-        "step_id": "step_3_5",
-        "name": "驗證 Flush Flag",
-        "scsi_cmd": null,
-        "ufs_query": "READ FLAG (依 Step 3.1/3.2 選擇的 flag)",
-        "opcode": null,
-        "query_opcode": null,
-        "idn": null,
-        "expected": "確認 reset 後 flush flag 狀態符合 SPEC",
-        "fail_condition": null,
-        "on_fail": null,
-        "produces": [],
-        "consumes": [],
-        "raw_content": "**UFS QUERY**: `READ FLAG (依 Step 3.1/3.2 選擇的 flag)`\n\n**Expected**: 確認 reset 後 flush flag 狀態符合 SPEC。\n\n---"
+        "raw_content": "**操作**: `Power On Reset`\n\n**目的**: 從 Sleep 狀態執行 POR，驗證 WB Buffer Flush 在 Sleep → POR 路徑下的穩定性。\n\n| Field | Value |\n|-------|-------|\n| Reset Type | POR (Power On Reset) |\n| 後續 | 等待裝置就緒（fDeviceInit == 0） |\n\n**Expected**: Reset device success\n\n**UFS SPEC Reference**: JESD220H Section 10.7.1.1 (Power On Reset)\n\n---"
       }
     ],
     "produces": [
-      "write_lba",
-      "write_len",
-      "write_data"
+      "write_record_p1",
+      "write_record_p2"
     ],
     "consumes": [
-      "max_lba"
+      "max_capacity_lun"
     ],
     "helper_methods": [
-      "_loop4_step_1_1",
-      "_loop4_step_1_2",
-      "_loop4_step_1_3",
-      "_loop4_step_1_4",
-      "_loop4_step_1_5",
-      "_loop4_step_1_6",
-      "_loop4_step_2_1",
-      "_loop4_step_2_2",
-      "_loop4_step_2_3",
-      "_loop4_step_2_4",
-      "_loop4_step_2_5",
-      "_loop4_step_3_3",
-      "_loop4_step_3_4",
-      "_loop4_step_3_5"
+      "_loop1_step_1_1",
+      "_loop1_step_1_2",
+      "_loop1_step_1_3",
+      "_loop1_step_1_4",
+      "_loop1_step_2_1",
+      "_loop1_step_2_2",
+      "_loop1_step_2_3",
+      "_loop1_step_2_4",
+      "_loop1_step_3_1",
+      "_loop1_step_3_2",
+      "_loop1_step_3_3",
+      "_loop1_step_3_4",
+      "_loop1_step_3_5"
     ],
     "loop_idx_param": false,
     "set_vars": [],

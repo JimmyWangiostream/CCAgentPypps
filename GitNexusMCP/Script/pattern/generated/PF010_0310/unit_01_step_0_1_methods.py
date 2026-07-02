@@ -1,33 +1,60 @@
 === WIKI REFS ===
-entities/scsi-commands.md — TEST UNIT READY is a UCS SCSI command (CONTROL byte 00h); GOOD status means ready
-entities/lun.md — target the UFS device well-known LUN for the readiness probe
+entities/write-booster.md -- Canonical idiom confirms WriteBooster support via get_extended_ufs_features_support().u8_write_booster
+entities/device-descriptor.md -- Device Descriptor structure reference
 
 === CODE REFS ===
-Script/api/cmd_seq/cmds.py: CmdSeqTestUnitReady (gitnexus context)
-Script/api/cmd_seq/protocols.py: IsEntry.enqueue (gitnexus context)
-Script/api/util/write_record/functions.py: get_empty_write_record (gitnexus query rank)
-Script/api/ufs_api/defines/enum_define.py: WellKnownLUN.UFS_DEVICE (gitnexus grep-confirmed)
+Script/api/ufs_api/descriptors/device_desc/functions.py:get_extended_ufs_features_support (gitnexus rank1)
+Script/pattern/rain/mutual_fun.py:config_lun -- idioms for reading gMaxNumberLU, gUnit[lun].b3_lu_enable, gUnit[lun].l4_num_alloc_units
+Script/api/ufs_api/descriptors/device_desc/functions.py:get_device_descriptor (caller of get_extended_ufs_features_support)
+Script/api/ufs_api/descriptors/device_desc/functions.py:get_extended_write_booster_support (rank2)
 
 === REVIEW FLAGS ===
+(empty)
 
 === EXTRA IMPORTS ===
+(none needed -- shared.param already accessible via Script.api level access pattern)
 
 === METHODS ===
     def step1(self) -> None:
-        """Step 0.1 — TEST UNIT READY (0x00). Expected: GOOD Status.
+        # sig: api.get_extended_ufs_features_support() -> ExtendedUFSFeaturesSupportUnion  via gitnexus context
+        # sig: shared.param access pattern from Script/pattern/rain/mutual_fun.py:config_lun
+        # Procedure: enumerate enabled Normal LUNs, pick the one with highest dNumAllocUnits
+        import Script.api.shared as shared
 
-        step1 runs first, so initialise the test-wide state the later steps read.
-        """
-        # Test-wide state shared across steps via self.* (process() runs step1..stepN).
-        self.default_lun: int = 0
-        self.write_record = api.get_empty_write_record()  # src[code]: Script/api/util/write_record/functions.py:get_empty_write_record
-        self.max_lba: int = 0
+        # 1. Check WriteBooster support via canonical path (NOT the FFU bit)
+        # src[code]: Script/api/ufs_api/descriptors/device_desc/functions.py:get_extended_ufs_features_support
+        extended_features = api.get_extended_ufs_features_support()
+        wb_support = extended_features.u8_write_booster  # bit mask; != 0 means supported
+        logger.info(f"[PF010_0310] WriteBooster support: {wb_support}")
+        if not wb_support:
+            raise api.UFS_NON_SUPPORT("WriteBooster is not supported on this device")
 
-        logger.info('Step 0.1: TEST UNIT READY (0x00) on UFS device LUN')
-        # sig: CmdSeqTestUnitReady.set_option(lun, timeout=100000, wait_queue_empty=False, delay_time=0) via gitnexus context
-        tur = ExecuteCMD.CmdSeqTestUnitReady()  # src[code]: Script/api/cmd_seq/cmds.py:CmdSeqTestUnitReady
-        tur.set_option(api.WellKnownLUN.UFS_DEVICE, wait_queue_empty=True)  # src[code]: Script/api/ufs_api/defines/enum_define.py:WellKnownLUN.UFS_DEVICE
-        # sig: IsEntry.enqueue() -> int via gitnexus context
-        tur.enqueue()
-        ExecuteCMD.send(clear_on_success=True)
-        logger.info('Step 0.1: device reported ready (GOOD Status expected)')
+        # 2. Find MaxCapacity Enabled Normal LUN
+        # src[wiki]: default.md -- Default LUN Selection (UserPrompt overrides ModelDefault)
+        # Procedure: enumerate all enabled Normal LUNs, read dNumAllocUnits, pick highest
+        max_lun = 0
+        max_alloc_units = 0
+        max_luns = shared.param.gMaxNumberLU  # idiom from config_lun
+        logger.info(f"[PF010_0310] Total LUNs: {max_luns}")
+
+        for lun in range(max_luns):
+            # Access cached unit descriptor via shared.param -- idiom from config_lun
+            unit = shared.param.gUnit[lun]
+            if unit.b3_lu_enable == 0:
+                continue  # skip disabled LUNs
+            # Skip Boot LUNs and Well-Known LUNs per CustomerReq WriteBooster LUN Restriction
+            # bBootEnable is in device descriptor; Well-Known LUNs are 0xC0-0xFF
+            if lun >= 0xC0:
+                continue
+            alloc_units = unit.l4_num_alloc_units
+            logger.info(f"[PF010_0310] LUN {lun}: b3_lu_enable={unit.b3_lu_enable}, l4_num_alloc_units={alloc_units}")
+            if alloc_units > max_alloc_units:
+                max_alloc_units = alloc_units
+                max_lun = lun
+
+        logger.info(f"[PF010_0310] MaxCapacity Enabled LUN: {max_lun} (alloc_units={max_alloc_units})")
+        if max_alloc_units == 0:
+            raise api.UFS_NON_SUPPORT("No enabled Normal LUN with valid allocation units found")
+
+        self.max_capacity_lun = max_lun  # consumed by step_0_2 and all loop steps
+        self.wb_support = wb_support     # consumed by step_0_2

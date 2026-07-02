@@ -1,6 +1,7 @@
 ---
 type: concept
 title: "Pattern: Health Report Implementation Guide"
+aliases: [health-report]
 tags: [pattern, script, implementation, health-report, device-health, eol]
 sources: [script, spec, modeldefault]
 created: 2026-06-21
