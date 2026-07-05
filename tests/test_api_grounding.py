@@ -4,9 +4,9 @@ Uses a tiny synthetic Script/ tree (no dependency on the real GitNexusMCP index)
 from pathlib import Path
 
 from pattern_generator.api_grounding import (
-    SCAFFOLD_NAMES, alias_for_path, api_facts, build_script_index,
-    check_api_calls, check_bare_names, format_issues, render_sig,
-    resolve_bare_name,
+    SCAFFOLD_NAMES, alias_for_path, api_facts, build_call_sites,
+    build_script_index, check_api_calls, check_bare_names, format_issues,
+    render_sig, resolve_bare_name,
 )
 
 
@@ -206,6 +206,76 @@ class TestApiFacts:
     def test_enum_fact_carries_alias_prefix(self, tmp_path):
         facts = api_facts(self._root(tmp_path), ("set_flag",), "set flag writebooster en")
         assert any(f.startswith("api.FlagIDN valid members:") for f in facts)
+
+
+class TestCallSites:
+    """Caller-FEED: build_call_sites reverse index + `real callers of` fact lines.
+
+    Sibling disambiguation must not depend on the model volunteering a cypher
+    lookup — real call sites are computed at prepare time and fed into the prompt."""
+
+    def _root(self, tmp_path):
+        root = _mini_script(tmp_path / "Script")
+        pat = root / "pattern"
+        (pat / "sample_code").mkdir(parents=True)
+        (pat / "generated").mkdir(parents=True)
+        (pat / "sample_code" / "flags_demo.py").write_text(
+            "from Script import api\n"
+            "def demo():\n"
+            "    api.set_flag(api.FlagIDN.WRITEBOOSTER_EN, index=0)\n",
+            encoding="utf-8")
+        (pat / "real_case.py").write_text(
+            "from Script import api\n"
+            "def run():\n"
+            "    api.set_flag(api.FlagIDN.DEVICE_INIT)\n"
+            "    api.set_flag(api.FlagIDN.DEVICE_INIT)\n",
+            encoding="utf-8")
+        (pat / "generated" / "gen_pat.py").write_text(
+            "from Script import api\n"
+            "def stepX():\n"
+            "    api.set_flag(1)\n",
+            encoding="utf-8")
+        return root
+
+    def test_call_sites_found_with_lineno(self, tmp_path):
+        sites = build_call_sites(self._root(tmp_path))
+        hits = sites.get("set_flag", [])
+        assert ("pattern/sample_code/flags_demo.py", 3) in hits
+        assert ("pattern/real_case.py", 3) in hits
+
+    def test_generated_dir_excluded(self, tmp_path):
+        # self-produced patterns must never serve as idiom evidence (self-poisoning)
+        sites = build_call_sites(self._root(tmp_path))
+        assert all("generated" not in p for p, _ in sites.get("set_flag", []))
+
+    def test_one_site_per_file(self, tmp_path):
+        # real_case.py calls set_flag twice -> ONE entry (distinct files > repeats)
+        sites = build_call_sites(self._root(tmp_path))
+        paths = [p for p, _ in sites.get("set_flag", [])]
+        assert paths.count("pattern/real_case.py") == 1
+
+    def test_api_facts_callers_line_ranked(self, tmp_path):
+        root = self._root(tmp_path)
+        facts = api_facts(root, ("set_flag",), "set flag",
+                          call_sites=build_call_sites(root))
+        lines = [f for f in facts if f.startswith("real callers of set_flag():")]
+        assert lines
+        # curated sample_code idiom must outrank the plain pattern caller
+        assert lines[0].index("pattern/sample_code/flags_demo.py") \
+            < lines[0].index("pattern/real_case.py")
+
+    def test_no_callers_no_line(self, tmp_path):
+        root = self._root(tmp_path)
+        facts = api_facts(root, ("do_write",), "do write",
+                          call_sites=build_call_sites(root))
+        assert not any(f.startswith("real callers of") for f in facts)
+
+    def test_api_facts_without_call_sites_unchanged(self, tmp_path):
+        facts = api_facts(self._root(tmp_path), ("set_flag",), "set flag")
+        assert not any(f.startswith("real callers of") for f in facts)
+
+    def test_missing_root_returns_empty(self, tmp_path):
+        assert build_call_sites(tmp_path / "nope") == {}
 
 
 class TestAliasMapping:

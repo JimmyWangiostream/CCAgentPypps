@@ -30,6 +30,20 @@ Agent-agnostic: any agent picking up one of these items starts here.
 | 4 | Gate-log miner → auto-draft `review_refs/` rules (ACE-style promotion loop) | deferred | blocked by (e); start after 10+ TC runs |
 | 3 | LSP layer (pyright/jedi references/hover) beside gitnexus | last | `cypher` caller-reverse-lookup covers most of the need; revisit only if it proves insufficient |
 
+## Status update (2026-07-06, second pass)
+
+The NOW patch below is IMPLEMENTED, plus a hardening the user's review demanded:
+instruction-only cypher/trace is advisory — a non-Claude model (Hermes may mount one)
+can ignore it and keep using only query/context. So caller evidence is now **FED
+deterministically**: `api_grounding.build_call_sites()` (AST reverse index over Script,
+`generated/` excluded to prevent self-poisoning) → `api_facts(call_sites=...)` emits
+`real callers of X(): path:line, ...` (top-3, sample_code > pattern > rest) →
+injected via `prepare._unit_api_facts` in BOTH grounding modes. cypher/trace in the
+prompt is demoted to fallback for symbols the FEED didn't cover.
+Deferred follow-up (B): a gate-audited disambiguation record (model must state which
+caller it read when ≥2 siblings were injected) — start it when gate logs show a
+wrong-API-chosen finding surviving this FEED.
+
 ## The NOW patch (one change, two levers)
 
 Edit the grounding-instruction blocks in `pattern_generator/stepwise.py`

@@ -409,8 +409,10 @@ GROUNDING (MANDATORY before writing any API call):
              a similarly-named getter exists.
            - Prefer copying a worked idiom from `Script/pattern/sample_code/` or a real
              `Script/pattern/` caller over assembling a call from a bare signature.
-           - To FIND the real callers to read, use the `cypher` tool (raw graph query;
-             read the resource gitnexus://repo/GitNexusMCP/schema once first):
+           - The injected "real callers of X():" fact lines (API facts block below)
+             already list call sites — START there: open one at its file:line.
+             FALLBACK, when no callers line covers your symbol: use the `cypher` tool
+             (raw graph query; read gitnexus://repo/GitNexusMCP/schema once first):
                MATCH (c)-[:CodeRelation {type: 'CALLS'}]->(f:Function {name: "<symbol>"})
                RETURN c.name, c.filePath
              then open ONE returned caller and copy its idiom. For "how does A reach B"
@@ -706,7 +708,9 @@ def build_one_unit_prompt(
             facts_header = (
                 "## Exact API facts (AUTHORITATIVE — copy these param names / enum members "
                 "verbatim; do NOT guess. If a symbol you need is absent, confirm it via "
-                "gitnexus/Script source — never invent a signature or enum)")
+                "gitnexus/Script source — never invent a signature or enum. \"real callers\" "
+                "lines list REAL call sites: when 2+ sibling symbols look plausible, OPEN one "
+                "listed caller at that file:line and copy its idiom BEFORE choosing)")
         else:
             # gitnexus mode: these facts are resolved by the weaker code_retrieval proxy
             # over a heuristic query, so they MAY name sibling or wrong-abstraction-layer
@@ -719,7 +723,10 @@ def build_one_unit_prompt(
                 "name sibling or wrong-layer symbols). PRIMARY = the signature you confirm "
                 "via gitnexus `context` on the symbol YOU selected; if these conflict with "
                 "gitnexus `context`, trust gitnexus. Do NOT copy a fact for a symbol you "
-                "did not choose, and never invent a signature or enum)")
+                "did not choose, and never invent a signature or enum. EXCEPTION — the "
+                "\"real callers\" lines are literal call sites (not heuristic): when 2+ "
+                "sibling symbols look plausible, OPEN one listed caller at that file:line "
+                "and copy its idiom BEFORE choosing)")
         parts.append(facts_header + "\n" + "\n".join(f"- {f}" for f in api_facts))
 
     # Direct-Script grounding: inject the top-N candidate symbols (retrieved from the

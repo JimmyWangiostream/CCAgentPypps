@@ -560,12 +560,74 @@ def _cached_index(script_root_str: str):
     return build_script_index(script_root_str)
 
 
-def api_facts(script_root, symbol_names=(), query: str = "", max_enums: int = 8) -> list:
+@functools.lru_cache(maxsize=8)
+def _cached_call_sites(script_root_str: str) -> dict:
+    """{callee_name: [(rel_path, lineno), ...]} — every call site in Script.
+
+    The FEED complement of the IDIOM & SELECTION rule: instead of hoping the model
+    reverse-looks-up real callers itself (gitnexus `cypher` — advisory, easily skipped),
+    prepare computes them here and injects them, so "read a real caller" becomes
+    "open the file:line already printed in your prompt". One entry per (file, name):
+    the FIRST call in a file (distinct files > repeat hits — idiom evidence wants
+    diversity). Directories named `generated` are EXCLUDED: generated patterns are this
+    pipeline's own output — feeding them back as caller evidence would let a wrong
+    generated idiom certify the next generation (self-poisoning)."""
+    root = Path(script_root_str)
+    if not root.exists():
+        return {}
+    sites: dict = {}
+    for py in sorted(root.rglob("*.py")):
+        rel = py.relative_to(root)
+        if "generated" in rel.parts:
+            continue
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", SyntaxWarning)
+                tree = ast.parse(py.read_text(encoding="utf-8-sig", errors="ignore"))
+        except (OSError, SyntaxError):
+            continue
+        rel_str = rel.as_posix()
+        seen_here: set = set()
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            f = node.func
+            name = f.attr if isinstance(f, ast.Attribute) else (
+                f.id if isinstance(f, ast.Name) else None)
+            if not name or name in seen_here:
+                continue
+            seen_here.add(name)
+            sites.setdefault(name, []).append((rel_str, node.lineno))
+    return sites
+
+
+def build_call_sites(script_root) -> dict:
+    """Public cached accessor for the call-site reverse index (see _cached_call_sites)."""
+    return _cached_call_sites(str(script_root))
+
+
+def _caller_rank(site: tuple) -> tuple:
+    """Sort key: sample_code (curated idioms) > real pattern/ callers > library-internal."""
+    path = site[0]
+    if "pattern/sample_code/" in path:
+        pri = 0
+    elif path.startswith("pattern/"):
+        pri = 1
+    else:
+        pri = 2
+    return (pri, path, site[1])
+
+
+def api_facts(script_root, symbol_names=(), query: str = "", max_enums: int = 8,
+              call_sites: dict | None = None) -> list:
     """Authoritative facts to inject into a unit prompt (possibly empty).
 
     * exact signature for each candidate `symbol_names` found in api/ExecuteCMD/lib;
     * valid members of every enum whose class-name shares a (non-generic) token with
-      the unit query or a candidate symbol — so the model copies the real member.
+      the unit query or a candidate symbol — so the model copies the real member;
+    * with `call_sites` (build_call_sites), a `real callers of X():` line per matched
+      symbol (top 3, sample_code > pattern > rest) — the caller-idiom evidence FED
+      instead of relying on the model to reverse-look-it-up itself.
 
     Deterministic, read straight from Script; cached per root. Returns [] if the
     root is not a Script library (graceful — generation proceeds without it)."""
@@ -596,6 +658,11 @@ def api_facts(script_root, symbol_names=(), query: str = "", max_enums: int = 8)
                         shown = ", ".join(rf[:30]) + (f", … (+{len(rf) - 30} more)"
                                                       if len(rf) > 30 else "")
                         facts.append(f"{spec.returns} fields (from {n}()): {shown}")
+                hits = (call_sites or {}).get(n) or []
+                if hits:
+                    top = sorted(hits, key=_caller_rank)[:3]
+                    facts.append("real callers of {}(): {}".format(
+                        n, ", ".join(f"{p}:{ln}" for p, ln in top)))
                 seen.add(n)
 
     enums = index.get("_enums", {})

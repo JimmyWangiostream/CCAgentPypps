@@ -142,7 +142,7 @@ def _unit_api_facts(unit: dict, script_root, version=None, k: int = 5) -> list:
         accessor's real signature + struct fields (incl u8_write_booster) are injected as
         a concrete anchor, not just idiom prose. This is the fix for the Hermes WB bug.
     The remaining symbols stay HEURISTIC (ride the mode-aware authority block)."""
-    from pattern_generator.api_grounding import api_facts, _cached_index
+    from pattern_generator.api_grounding import api_facts, build_call_sites, _cached_index
     from pattern_generator.capability_resolver import canonical_symbols, version_gate
     from code_retrieval.retrieve import retrieve_code
     query = _unit_code_query(unit).strip()
@@ -158,7 +158,10 @@ def _unit_api_facts(unit: dict, script_root, version=None, k: int = 5) -> list:
     # Force-feed the canonical idiom's accessor(s) so their real fields anchor the model.
     canon = canonical_symbols(_unit_canonical(unit))
     names = list(dict.fromkeys(canon + names))
-    return api_facts(script_root, names, query)
+    # Caller-FEED: real call sites per candidate, so sibling disambiguation ("read a
+    # real caller") is answered IN the prompt instead of relying on the model to
+    # reverse-look-up callers itself (cypher stays the fallback for the long tail).
+    return api_facts(script_root, names, query, call_sites=build_call_sites(script_root))
 
 
 def _unit_canonical(unit: dict) -> list:
