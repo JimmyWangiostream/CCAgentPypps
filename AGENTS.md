@@ -135,6 +135,10 @@ Generate a UFS test pattern for TC/<file>.md. Run, in order:
   `type:`, orphans, stale `default.md`, conflicts→missing pages, unused source/code trees).
   Run after editing the wiki; exit 1 on any error. Code-only grounding stays in gitnexus/Script
   — NO code tree belongs under `wiki/` (the lint errors on one).
+- **Adding NEW knowledge to the wiki (any agent): follow `wiki/MAINTENANCE.md`** — the
+  decision table (constraint vs definition vs procedure vs review lesson → where each goes),
+  the Ingest steps, the spec-only invariant (wiki never carries code), and the promotion
+  flow when code lands later. Pipeline improvement backlog: `docs/IMPROVEMENT_ROADMAP.md`.
 - **VC (Verification Criteria, `wiki/VC/`, `wiki_retrieval/vc.py`)** — 361 per-pattern test
   specs (criterion + checkpoints + expected results). Auto-used: a capped, BM25-gated VC band
   is surfaced in unit-prompt wiki essence; `review`/`finish` injects matched VC docs (keyword +

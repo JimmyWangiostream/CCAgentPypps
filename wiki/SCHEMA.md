@@ -51,6 +51,9 @@ Based on LLM Wiki pattern with integrated conflict resolution.
 **Query** - Ask question, synthesize from wiki
 **Lint** - Health check for structure and semantic issues
 
+Step-by-step maintenance runbook (Ingest procedure, decision table, invariants,
+promotion flow): see `wiki/MAINTENANCE.md`.
+
 ---
 
 Status: First ingest completed 2026-06-21 (see log.md); Script source retired 2026-07-02

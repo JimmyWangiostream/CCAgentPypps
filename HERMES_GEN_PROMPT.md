@@ -23,6 +23,10 @@ repair round**. The per-unit gate exists so bugs die at the unit, not at the end
 - Detailed rules live in `AGENTS.md` + `CLAUDE.md` — read them if anything here is
   unclear. Every LLM step's full instructions are in the `.txt` prompt the CLI emits;
   those emitted prompts are AUTHORITATIVE (this file only orchestrates).
+- Asked to ADD KNOWLEDGE to the wiki (new customer doc / VU spec / constraint) instead of
+  generating a pattern? Follow `wiki/MAINTENANCE.md` (decision table + Ingest steps;
+  wiki pages are spec-only — code never goes into the wiki). Improvement backlog:
+  `docs/IMPROVEMENT_ROADMAP.md`.
 
 ## Procedure
 

@@ -5,6 +5,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 > **Generating a pattern from a TC?** A packaged skill at
 > `.claude/skills/generate-pattern/SKILL.md` indexes the whole pipeline (any agent can invoke
 > it); `AGENTS.md` is the detailed runbook. This file has the command syntax + Step rules.
+>
+> **Adding new knowledge to the wiki (customer doc / VU spec / constraint)?** Follow
+> `wiki/MAINTENANCE.md` (decision table + Ingest steps; wiki pages are spec-only — code
+> never goes into the wiki). Pipeline improvement backlog: `docs/IMPROVEMENT_ROADMAP.md`.
 
 ## Environment & Dependencies (read first)
 
