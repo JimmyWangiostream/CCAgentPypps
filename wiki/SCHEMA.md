@@ -2,7 +2,7 @@
 
 Based on LLM Wiki pattern with integrated conflict resolution.
 
-## Knowledge Sources (6 integrated)
+## Knowledge Sources
 
 1. **Spec/** - UFS specification baseline (raw, immutable)
 2. **CustomerReq/** - Customer requirements (raw, immutable)
@@ -29,9 +29,9 @@ Based on LLM Wiki pattern with integrated conflict resolution.
 - Logged: conflicts.md
 
 **All Others: Keep Both**
-- When: Any other conflict (e.g., Spec vs Script)
+- When: Any other conflict (e.g., Spec vs UserPrompt)
 - Result: Both values kept, logged in conflicts.md
-- Examples: Spec vs Script, Script vs ModelDefault, etc.
+- Examples: Spec vs UserPrompt, CustomerReq vs ModelDefault, etc.
 
 ## Wiki Structure
 
@@ -53,5 +53,5 @@ Based on LLM Wiki pattern with integrated conflict resolution.
 
 ---
 
-Status: Ready for first ingest
+Status: First ingest completed 2026-06-21 (see log.md); Script source retired 2026-07-02
 Created: 2026-06-21
