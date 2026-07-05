@@ -7,7 +7,9 @@ Based on LLM Wiki pattern with integrated conflict resolution.
 1. **Spec/** - UFS specification baseline (raw, immutable)
 2. **CustomerReq/** - Customer requirements (raw, immutable)
 3. **UserPrompt/** - Test engineer guidance (raw, immutable)
-4. **Script/** - Pattern code examples (raw, immutable)
+4. **Script/** - RETIRED (2026-07-02, commit 1e7e044): the raw code copy under wiki/ was
+   removed. Code knowledge is grounded via the gitnexus index over `GitNexusMCP/Script/` —
+   the wiki must NOT carry code trees (enforced by wiki_lint: code tree under wiki/ = ERROR).
 5. **ProNoun/** - Terminology definitions (raw, immutable)
 6. **ModelDefault/** - Auto-generated defaults (raw, immutable)
 7. **VC/** - Verification Criteria: per-pattern test specs (criterion + checkpoints +
@@ -40,7 +42,6 @@ Based on LLM Wiki pattern with integrated conflict resolution.
 - Spec/ - UFS spec files
 - CustomerReq/ - Customer requirement files
 - UserPrompt/ - Test guidance files
-- Script/ - Pattern code files
 - ProNoun/ - Terminology files
 - ModelDefault/ - Default value files
 
