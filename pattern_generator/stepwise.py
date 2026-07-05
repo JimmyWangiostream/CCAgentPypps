@@ -409,10 +409,20 @@ GROUNDING (MANDATORY before writing any API call):
              a similarly-named getter exists.
            - Prefer copying a worked idiom from `Script/pattern/sample_code/` or a real
              `Script/pattern/` caller over assembling a call from a bare signature.
-  WIKI  → Use ONLY the injected "Wiki references" block below (RRF top-5 + essence);
-           do not free-read the wiki. Conflict overrides shown there WIN
-           (Rule 1 CustomerReq>Spec, Rule 2 UserPrompt>ModelDefault — two independent
-           rules). Record the pages you used in === WIKI REFS ===.
+           - To FIND the real callers to read, use the `cypher` tool (raw graph query;
+             read the resource gitnexus://repo/GitNexusMCP/schema once first):
+               MATCH (c)-[:CodeRelation {type: 'CALLS'}]->(f:Function {name: "<symbol>"})
+               RETURN c.name, c.filePath
+             then open ONE returned caller and copy its idiom. For "how does A reach B"
+             call chains use the `trace` tool. Both need repo="GitNexusMCP".
+  WIKI  → Start from the injected "Wiki references" block below (RRF top-5 + essence).
+           Conflict overrides shown there WIN (Rule 1 CustomerReq>Spec, Rule 2
+           UserPrompt>ModelDefault — two independent rules). If a protocol question
+           this unit needs is NOT covered by the injected block, actively query the
+           wiki yourself: run `python wiki_retrieve.py "<query>"` from the repo root
+           (same essence format; try 1-2 rephrased queries before concluding NO MATCH).
+           Do NOT free-read wiki page bodies — essence only. Record every page you
+           used (injected or self-queried) in === WIKI REFS ===.
 
 PROVENANCE:
   Tag every grounded element:  # src[code]: <gitnexus path>:<sym>  or  # src[wiki]: <wiki/path.md>
@@ -511,10 +521,14 @@ GROUNDING (MANDATORY before writing any API call):
            - Do NOT call any symbol you have not confirmed exists by reading its source.
              If you cannot confirm it, do not guess — emit TODO-REVIEW-NO-CODE-REF and
              tag the call # TODO human-confirm.
-  WIKI  → Use ONLY the injected "Wiki references" block below (RRF top-5 + essence);
-           do not free-read the wiki. Conflict overrides shown there WIN
-           (Rule 1 CustomerReq>Spec, Rule 2 UserPrompt>ModelDefault — two independent
-           rules). Record the pages you used in === WIKI REFS ===.
+  WIKI  → Start from the injected "Wiki references" block below (RRF top-5 + essence).
+           Conflict overrides shown there WIN (Rule 1 CustomerReq>Spec, Rule 2
+           UserPrompt>ModelDefault — two independent rules). If a protocol question
+           this unit needs is NOT covered by the injected block, actively query the
+           wiki yourself: run `python wiki_retrieve.py "<query>"` from the repo root
+           (same essence format; try 1-2 rephrased queries before concluding NO MATCH).
+           Do NOT free-read wiki page bodies — essence only. Record every page you
+           used (injected or self-queried) in === WIKI REFS ===.
 
 PROVENANCE:
   Tag every grounded element:  # src[code]: <Script path>:<sym>  or  # src[wiki]: <wiki/path.md>
