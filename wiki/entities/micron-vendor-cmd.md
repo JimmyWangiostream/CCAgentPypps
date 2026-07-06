@@ -45,10 +45,9 @@ Each VU is exactly one of — its page MUST state which:
 | Data-Out | host sends a data payload after the header |
 | No-data | header only |
 
-The three matching sender helpers live in `Script/project_api/` — ground them via
-gitnexus (`repo="GitNexusMCP"`) at generation time; this wiki intentionally carries no
-code. Per-VU wrapper naming convention: `issue_<func><opcode>_<Name>` (e.g. func 0x40 +
-opcode 0xB1 → `issue_40B1_...`).
+Sender selection follows direction; discover the current sender/wrapper symbols via
+gitnexus (`repo="GitNexusMCP"`) at generation time — this wiki intentionally carries no
+code and makes no claims about what code exists.
 
 ## What a per-VU page must specify (nothing else)
 
@@ -56,6 +55,7 @@ opcode 0xB1 → `issue_40B1_...`).
 2. The three constants: opcode, func, transfer_length.
 3. Each command-specific field: byte range **with width pinned**, endianness, value source
    (caller parameter vs constant). Field width is never left to inference — a real bug
-   (CE documented loosely, implemented as 2 bytes instead of 4) came from exactly this.
+   (CE documented loosely, implemented as 2 bytes instead of 4; see [[conflicts]]
+   Conflict #3) came from exactly this.
 4. Transfer direction (Data-In / Data-Out / No-data).
 5. Meaning of returned data (what a pattern should assert), when Data-In.

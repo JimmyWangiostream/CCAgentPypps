@@ -53,8 +53,10 @@ When a new source document arrives:
      so this is the main retrieval lever.
    - `[[wikilinks]]` to existing related pages (dangling links = lint warning).
    - **Spec content only** (invariant 1): parameter tables, byte offsets, expected values,
-     authority notes. If code for it does not exist yet, say so in ONE line and register
-     the compose recipe in `procedure_idioms.py` — NOT in the page.
+     authority notes. NEVER state what code exists or is missing (no "a wrapper exists" /
+     "no helper yet" lines — code state is gitnexus's job and goes stale in prose).
+     Doc-without-code bootstrap recipes go in `procedure_idioms.py`; spec-vs-implementation
+     conflicts go in `wiki/conflicts.md` (the page carries only a [[conflicts]] pointer).
 3. Backlink: add the new page to `wiki/sources/<source>.md` frontmatter (`entities:`/`concepts:`).
 4. Conflict check: if the doc contradicts Spec (Rule 1) or ModelDefault (Rule 2), record
    the resolution in `wiki/conflicts.md` (quote the raw source text).
